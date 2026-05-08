@@ -1,15 +1,12 @@
-use std::{
-    collections::HashSet,
-    fs,
-};
+use std::{collections::HashSet, fs, path::Path};
 
 use clap::{Arg, ArgAction, Command};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle, HumanBytes};
+use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
-mod gcroots;
 mod binary_cache;
 mod dep_scan;
+mod gcroots;
 
 fn main() {
     // Define command-line arguments
@@ -22,26 +19,26 @@ fn main() {
                 .action(ArgAction::SetTrue)
                 .short('n')
                 .long("dry-run")
-                .help("Do not actually delete files")
+                .help("Do not actually delete files"),
         )
-        .arg(
-            Arg::new("CACHEDIR")
-                .required(true)
-                .help("Cache directory")
-        )
+        .arg(Arg::new("CACHEDIR").required(true).help("Cache directory"))
         .arg(
             Arg::new("GCROOTS")
                 .num_args(1..)
                 .default_value("/nix/var/nix/gcroots")
-                .help("Garbage collector roots")
+                .help("Garbage collector roots"),
         )
         .get_matches();
     let dry_run = matches.get_flag("DRYRUN");
 
-    let make_spinner = |color| ProgressStyle::with_template(
-        &"{spinner} {prefix:.bold.dim} {wide_bar:.COLOR} [{pos:.bold.dim}/{len:.bold}] {msg}".replace("COLOR", color))
+    let make_spinner = |color| {
+        ProgressStyle::with_template(
+            &"{spinner} {prefix:.bold.dim} {wide_bar:.COLOR} [{pos:.bold.dim}/{len:.bold}] {msg}"
+                .replace("COLOR", color),
+        )
         .unwrap()
-        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+    };
     let progress = MultiProgress::new();
     let progress_gcroots = progress.add(ProgressBar::new(0));
     progress_gcroots.set_prefix("Scanning GCROOTS");
@@ -73,116 +70,90 @@ fn main() {
     progress_gcroots.finish();
 
     // Construct cache abstraction
-    let mut cache = binary_cache::BinaryCache::new(
-        matches.get_one::<String>("CACHEDIR")
-            .expect("CACHEDIR")
-    );
+    let mut cache =
+        binary_cache::BinaryCache::new(matches.get_one::<String>("CACHEDIR").expect("CACHEDIR"));
     // Scan gcroots dependencies
     let mut scanner = dep_scan::DependencyScanner::new();
-    store_paths.into_iter()
-        .for_each(|path| scanner.enqueue(path));
+    for path in store_paths {
+        scanner.enqueue(path);
+    }
     let scanner_seen = scanner.scan(&mut cache, &progress_scanner);
     progress_scanner.finish();
 
     // Statistics
-    let (mut file_size, mut nar_size) = (0usize, 0usize);
+    let (mut file_size, mut nar_size) = (0u64, 0u64);
     // Set of files to keep
     progress_keep.set_length(scanner_seen.len() as u64);
     let mut keep_infos = HashSet::with_capacity(scanner_seen.len());
     let mut keep_archives = HashSet::with_capacity(scanner_seen.len());
     let cache_path = cache.path.clone();
-    scanner_seen.into_iter()
-        .filter_map(|path| {
-            let result = cache.get_info_by_store_path(&path)
-                .ok();
-            progress_keep.inc(1);
-            result
-        })
-        .for_each(|info| {
-            keep_infos.insert(info.path);
-            keep_archives.insert(cache_path.join(info.fields.get("URL").unwrap()));
-            file_size += info.fields.get("FileSize").unwrap().parse::<usize>().unwrap();
-            nar_size += info.fields.get("NarSize").unwrap().parse::<usize>().unwrap();
-            progress_keep.set_message(
-                format!("{} in {} archive files", HumanBytes(nar_size as u64), HumanBytes(file_size as u64))
-            );
-        });
+    for path in scanner_seen {
+        let result = cache.get_info_by_store_path(&path).ok();
+        progress_keep.inc(1);
+        let Some(info) = result else { continue };
+        keep_infos.insert(info.path);
+        keep_archives.insert(cache_path.join(info.fields.get("URL").unwrap()));
+        file_size += info.fields.get("FileSize").unwrap().parse::<u64>().unwrap();
+        nar_size += info.fields.get("NarSize").unwrap().parse::<u64>().unwrap();
+        progress_keep.set_message(format!(
+            "{} in {} archive files",
+            HumanBytes(nar_size),
+            HumanBytes(file_size)
+        ));
+    }
     // free memory early
     drop(cache);
-    progress_keep.finish_with_message(
-        format!("{} in {} archive files", HumanBytes(nar_size as u64), HumanBytes(file_size as u64))
-    );
+    progress_keep.finish_with_message(format!(
+        "{} in {} archive files",
+        HumanBytes(nar_size),
+        HumanBytes(file_size)
+    ));
 
-    let mut rm_narinfo_size = 0;
-    let mut rm_nar_size = 0;
-
-    progress_rm_narinfo.set_length(0);
-    for entry in WalkDir::new(&cache_path)
-        .min_depth(1)
-        .max_depth(1)
-    {
-        let entry = entry.unwrap();
-        if entry.path().to_str().unwrap().ends_with(".narinfo") && ! keep_infos.contains(entry.path()) {
-            progress_rm_narinfo.inc_length(1);
-
-            if let Ok(meta) = fs::metadata(entry.path()) {
-                rm_narinfo_size += meta.len();
-                progress_rm_narinfo.set_message(format!("{}", HumanBytes(rm_narinfo_size)));
-            } else {
-                eprintln!("Cannot stat {}", entry.path().display());
-            }
-
-            if ! dry_run {
-                match fs::remove_file(entry.path()) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        eprintln!("Cannot remove {}: {}", entry.path().display(), e);
-                    }
-                }
-            }
-
-            progress_rm_narinfo.inc(1);
-        }
-    }
-    // free memory early
+    let rm_narinfo_size = sweep(&cache_path, &progress_rm_narinfo, dry_run, |path| {
+        path.extension().is_some_and(|ext| ext == "narinfo") && !keep_infos.contains(path)
+    });
     drop(keep_infos);
-    progress_rm_narinfo.finish_with_message(
-        format!("{}", HumanBytes(rm_narinfo_size))
-    );
+    progress_rm_narinfo.finish_with_message(format!("{}", HumanBytes(rm_narinfo_size)));
 
-    progress_rm_nar.set_length(0);
-    for entry in WalkDir::new(cache_path.join("nar"))
-        .min_depth(1)
-        .max_depth(1)
-    {
-        let entry = entry.unwrap();
-        if ! keep_archives.contains(entry.path()) {
-            progress_rm_nar.inc_length(1);
-
-            if let Ok(meta) = fs::metadata(entry.path()) {
-                rm_nar_size += meta.len();
-                progress_rm_nar.set_message(format!("{}", HumanBytes(rm_nar_size)));
-            } else {
-                eprintln!("Cannot stat {}", entry.path().display());
-            }
-
-            if ! dry_run {
-                match fs::remove_file(entry.path()) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        eprintln!("Cannot remove {}: {}", entry.path().display(), e);
-                    }
-                }
-            }
-
-            progress_rm_nar.inc(1);
-        }
-    }
-    // free memory early
+    let rm_nar_size = sweep(&cache_path.join("nar"), &progress_rm_nar, dry_run, |path| {
+        !keep_archives.contains(path)
+    });
     drop(keep_archives);
-    progress_rm_nar.finish_with_message(
-        format!("{}", HumanBytes(rm_nar_size))
-    );
+    progress_rm_nar.finish_with_message(format!("{}", HumanBytes(rm_nar_size)));
+}
 
-    // progress.clear().unwrap();
+/// Walk `dir` (depth 1) and delete every entry for which `should_delete` returns true.
+/// Returns total size of matched files. Honors `dry_run`.
+fn sweep(
+    dir: &Path,
+    progress: &ProgressBar,
+    dry_run: bool,
+    should_delete: impl Fn(&Path) -> bool,
+) -> u64 {
+    let mut total = 0;
+    progress.set_length(0);
+    for entry in WalkDir::new(dir).min_depth(1).max_depth(1) {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if !should_delete(path) {
+            continue;
+        }
+        progress.inc_length(1);
+
+        if let Ok(meta) = fs::metadata(path) {
+            total += meta.len();
+            progress.set_message(format!("{}", HumanBytes(total)));
+        } else {
+            eprintln!("Cannot stat {}", path.display());
+        }
+
+        if !dry_run
+            && let Err(e) = fs::remove_file(path)
+        {
+            eprintln!("Cannot remove {}: {}", path.display(), e);
+        }
+
+        progress.inc(1);
+    }
+    total
 }
