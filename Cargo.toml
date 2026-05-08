@@ -2,7 +2,10 @@
 name = "kiss-cache"
 description = "Trim Nix binary caches according to GC roots"
 version = "1.0.0"
-authors = ["Astro <astro@spaceboyz.net>"]
+authors = [
+  "Astro <astro@spaceboyz.net>",
+  "Jörg Thalheim <joerg@thalheim.io>",
+]
 edition = "2024"
 license = "MIT"
 homepage = "https://github.com/Mic92/kiss-cache"

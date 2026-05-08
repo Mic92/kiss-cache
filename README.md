@@ -7,6 +7,11 @@ This one runs with a list of GC roots just like your ordinary
 files like [lheckemann's
 cache-gc](https://github.com/lheckemann/cache-gc).
 
+A fork of [Astro's nix-cache-cut](https://github.com/astro/nix-cache-cut),
+which introduced the GC-root-based approach. This fork adds a
+persistent metadata cache, parallel scanning, NixOS modules for
+serving over mTLS, and HTTP-pushable GC roots.
+
 ## Usage
 
 ```console
