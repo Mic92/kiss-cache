@@ -164,6 +164,24 @@ fn short_store_path_root_is_skipped() {
     assert!(!fx.narinfo_exists(HASH_GARBAGE));
 }
 
+/// A reachable but malformed narinfo (missing required fields) must not
+/// abort the run; it should just be skipped, leaving the rest of the cache
+/// pruned correctly.
+#[test]
+fn malformed_narinfo_is_skipped() {
+    let fx = standard_fixture();
+    // Reachable from HASH_ROOT via References, but truncated.
+    fs::write(
+        fx.cache.join(format!("{HASH_DEP}.narinfo")),
+        format!("StorePath: /nix/store/{HASH_DEP}-dep\n"),
+    )
+    .unwrap();
+
+    fx.run(false);
+    assert!(fx.narinfo_exists(HASH_ROOT), "good root kept");
+    assert!(!fx.narinfo_exists(HASH_GARBAGE), "garbage deleted");
+}
+
 /// A gcroot directory containing a *relative* symlink to another directory,
 /// which in turn holds the actual store-path symlink. Nix produces such
 /// chains (e.g. profiles/system -> system-1-link). The relative target must

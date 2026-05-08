@@ -137,10 +137,18 @@ fn run(args: &Args) {
         let result = cache.get_info_by_store_path(&path).ok();
         progress_keep.inc(1);
         let Some(info) = result else { continue };
-        keep_infos.insert(info.path);
-        keep_archives.insert(cache_path.join(info.fields.get("URL").unwrap()));
-        file_size += info.fields.get("FileSize").unwrap().parse::<u64>().unwrap();
-        nar_size += info.fields.get("NarSize").unwrap().parse::<u64>().unwrap();
+        // A truncated or hand-edited narinfo must not abort the run, but it
+        // also must not be treated as fully accounted for: keep its .narinfo
+        // (it is still reachable) but warn and skip statistics/archive
+        // tracking for the missing fields.
+        keep_infos.insert(info.path.clone());
+        if let Some(url) = info.fields.get("URL") {
+            keep_archives.insert(cache_path.join(url));
+        } else {
+            eprintln!("Malformed narinfo (missing URL): {}", info.path.display());
+        }
+        file_size += parse_size(&info, "FileSize");
+        nar_size += parse_size(&info, "NarSize");
         progress_keep.set_message(format!(
             "{} in {} archive files",
             HumanBytes(nar_size),
@@ -169,6 +177,15 @@ fn run(args: &Args) {
     );
     drop(keep_archives);
     progress_rm_nar.finish_with_message(format!("{}", HumanBytes(rm_nar_size)));
+}
+
+/// Read a numeric narinfo field, treating missing or unparsable values as 0
+/// so that statistics never abort the run.
+fn parse_size(info: &binary_cache::Info, field: &str) -> u64 {
+    info.fields
+        .get(field)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Walk `dir` (depth 1) and delete every entry for which `should_delete` returns true.
