@@ -47,6 +47,16 @@ in
       description = "Binary cache directory to serve. See `services.kiss-cache-serve.cacheDir`.";
     };
 
+    priority = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 30;
+      description = ''
+        Substituter priority advertised in `nix-cache-info`. Lower
+        wins; the default 30 makes this cache preferred over
+        cache.nixos.org's 40.
+      '';
+    };
+
     readClients = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -81,109 +91,114 @@ in
       }
     ];
 
-    services.tor = {
-      enable = true;
-      relay.onionServices = {
-        kiss-cache-read = {
-          version = 3;
-          map = [
-            {
-              port = 80;
-              target.unix = readSocket;
-            }
-          ];
-          authorizedClients = cfg.readClients;
+    services = {
+      tor = {
+        enable = true;
+        relay.onionServices = {
+          kiss-cache-read = {
+            version = 3;
+            map = [
+              {
+                port = 80;
+                target.unix = readSocket;
+              }
+            ];
+            authorizedClients = cfg.readClients;
+          };
+          kiss-cache-write = {
+            version = 3;
+            map = [
+              {
+                port = 80;
+                target.unix = writeSocket;
+              }
+            ];
+            authorizedClients = cfg.writeClients;
+          };
         };
-        kiss-cache-write = {
-          version = 3;
-          map = [
-            {
-              port = 80;
-              target.unix = writeSocket;
-            }
-          ];
-          authorizedClients = cfg.writeClients;
+      };
+
+      # When the pruner is enabled on this host, the write onion's
+      # markers are roots.
+      kiss-cache.gcRoots = lib.mkIf config.services.kiss-cache.enable [
+        "${cfg.cacheDir}/gcroots"
+      ];
+
+      nginx = {
+        enable = true;
+        virtualHosts = {
+          # Read-only: serve narinfo/nar and gcroot markers, no DAV.
+          kiss-cache-tor-read = {
+            listen = [ { addr = "unix:${readSocket}"; } ];
+            root = cfg.cacheDir;
+            locations = {
+              "/".extraConfig = ''
+                expires max;
+                add_header Cache-Control immutable;
+              '';
+              "= /nix-cache-info".extraConfig = ''
+                default_type text/plain;
+                return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: ${toString cfg.priority}\n";
+              '';
+              "/gcroots/".extraConfig = ''
+                expires off;
+                add_header Cache-Control no-store;
+              '';
+            };
+          };
+          # Read-write: same plus DAV PUT for `nix copy --to` and
+          # PUT/DELETE on /gcroots/.
+          kiss-cache-tor-write = {
+            listen = [ { addr = "unix:${writeSocket}"; } ];
+            root = cfg.cacheDir;
+            locations = {
+              "/".extraConfig = ''
+                expires max;
+                add_header Cache-Control immutable;
+                dav_methods PUT;
+                ${davCommon}
+                client_max_body_size 0;
+              '';
+              "= /nix-cache-info".extraConfig = ''
+                default_type text/plain;
+                return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: ${toString cfg.priority}\n";
+              '';
+              "/gcroots/".extraConfig = ''
+                expires off;
+                add_header Cache-Control no-store;
+                dav_methods PUT DELETE;
+                ${davCommon}
+                client_max_body_size 4k;
+              '';
+            };
+          };
         };
       };
     };
 
-    services.nginx = {
-      enable = true;
-      virtualHosts = {
-        # Read-only: serve narinfo/nar and gcroot markers, no DAV.
-        kiss-cache-tor-read = {
-          listen = [ { addr = "unix:${readSocket}"; } ];
-          root = cfg.cacheDir;
-          locations = {
-            "/".extraConfig = ''
-              expires max;
-              add_header Cache-Control immutable;
-            '';
-            "= /nix-cache-info".extraConfig = ''
-              default_type text/plain;
-              return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n";
-            '';
-            "/gcroots/".extraConfig = ''
-              expires off;
-              add_header Cache-Control no-store;
-            '';
-          };
-        };
-        # Read-write: same plus DAV PUT for `nix copy --to` and
-        # PUT/DELETE on /gcroots/.
-        kiss-cache-tor-write = {
-          listen = [ { addr = "unix:${writeSocket}"; } ];
-          root = cfg.cacheDir;
-          locations = {
-            "/".extraConfig = ''
-              expires max;
-              add_header Cache-Control immutable;
-              dav_methods PUT;
-              ${davCommon}
-              client_max_body_size 0;
-            '';
-            "= /nix-cache-info".extraConfig = ''
-              default_type text/plain;
-              return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n";
-            '';
-            "/gcroots/".extraConfig = ''
-              expires off;
-              add_header Cache-Control no-store;
-              dav_methods PUT DELETE;
-              ${davCommon}
-              client_max_body_size 4k;
-            '';
-          };
-        };
+    systemd = {
+      # nginx writes uploads to a temp file then renames into place;
+      # the temp dir must be on the same filesystem.
+      tmpfiles.rules = [
+        "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
+        "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} -"
+        # Tor connects to the sockets as the `tor` user; group-writable
+        # sockets in a tor-group dir let it without granting world access.
+        "d ${socketDir} 0750 ${config.services.nginx.user} tor -"
+      ];
+
+      # tor.service runs in its own RootDirectory; bind the socket dir
+      # into its namespace. The dir is created by tmpfiles before
+      # either unit starts, so the bind never refers to a non-existent
+      # path.
+      services.tor.serviceConfig.BindPaths = [ socketDir ];
+      services.nginx.serviceConfig = {
+        # Group-readable sockets so the `tor` group can connect.
+        UMask = lib.mkDefault "0007";
+        # NixOS hardens nginx with ProtectSystem=strict; WebDAV PUT
+        # needs an explicit grant to write into the cache directory.
+        ReadWritePaths = [ cfg.cacheDir ];
       };
     };
-
-    # nginx writes uploads to a temp file then renames into place; the
-    # temp dir must be on the same filesystem.
-    systemd.tmpfiles.rules = [
-      "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
-      "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} -"
-      # Tor connects to the sockets as the `tor` user; group-writable
-      # sockets in a tor-group dir let it without granting world access.
-      "d ${socketDir} 0750 ${config.services.nginx.user} tor -"
-    ];
-
-    # tor.service runs in its own RootDirectory; bind the socket dir
-    # into its namespace. The dir is created by tmpfiles before either
-    # unit starts, so the bind never refers to a non-existent path.
-    systemd.services.tor.serviceConfig.BindPaths = [ socketDir ];
-    systemd.services.nginx.serviceConfig = {
-      # Group-readable sockets so the `tor` group can connect.
-      UMask = lib.mkDefault "0007";
-      # NixOS hardens nginx with ProtectSystem=strict; WebDAV PUT needs
-      # an explicit grant to write into the cache directory.
-      ReadWritePaths = [ cfg.cacheDir ];
-    };
-
-    # When the pruner is enabled on this host, the write onion's
-    # markers are roots.
-    services.kiss-cache.gcRoots = lib.mkIf config.services.kiss-cache.enable [
-      "${cfg.cacheDir}/gcroots"
-    ];
   };
 }

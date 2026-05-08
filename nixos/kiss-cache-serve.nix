@@ -42,6 +42,16 @@ in
       description = "Server TLS private key in PEM format.";
     };
 
+    priority = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 30;
+      description = ''
+        Substituter priority advertised in `nix-cache-info`. Lower
+        wins; the default 30 makes this cache preferred over
+        cache.nixos.org's 40.
+      '';
+    };
+
     clientCA = lib.mkOption {
       type = lib.types.path;
       description = ''
@@ -173,7 +183,7 @@ in
           '';
           "= /nix-cache-info".extraConfig = ''
             default_type text/plain;
-            return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n";
+            return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: ${toString cfg.priority}\n";
           '';
           # On local miss, fetch from the upstream cache and store the result
           # at the same path so the next request is a local hit. proxy_store

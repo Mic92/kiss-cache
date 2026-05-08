@@ -58,7 +58,7 @@ let
       # The substituter is always the configured cache, even when an
       # override marker URL is passed: the override is for picking a
       # different system, not a different store.
-      substituter=${lib.escapeShellArg "${cfg.cacheUrl}?priority=10${storeTls}"}
+      substituter=${lib.escapeShellArg "${cfg.cacheUrl}?priority=${toString cfg.priority}${storeTls}"}
 
       # Take the first store-path line; ignore unrelated content. An
       # absent or empty marker means CI has not published yet; that is
@@ -175,6 +175,17 @@ in
       description = ''
         CA certificate the cache server's TLS certificate is verified
         against. `null` to use the system trust store.
+      '';
+    };
+
+    priority = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 10;
+      description = ''
+        Substituter priority for the realise step. Lower wins; the
+        default 10 makes this cache preferred over the configured
+        substituters so the system pull does not fall through to a
+        slower upstream.
       '';
     };
 
