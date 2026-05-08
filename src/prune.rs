@@ -1,4 +1,9 @@
-use std::{collections::HashSet, fs, path::Path, path::PathBuf};
+use std::{
+    collections::HashSet,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 
 /// How often to rebuild progress-bar message strings. Indicatif redraws at
 /// most ~15 times a second; formatting more often than that is wasted work.
@@ -63,8 +68,12 @@ pub fn run(config: &Config, progress: &Progress) {
     let (mut file_size, mut nar_size) = (0u64, 0u64);
     // Set of files to keep
     progress.keep.set_length(infos.len() as u64);
-    let mut keep_infos = HashSet::with_capacity(infos.len());
-    let mut keep_archives = HashSet::with_capacity(infos.len());
+    // Both sweep passes walk a single directory level and compare each
+    // entry against a keep-set. Keying on the file name alone avoids
+    // hashing the (identical) cache directory prefix on every membership
+    // check, and avoids storing it thousands of times.
+    let mut keep_infos: HashSet<OsString> = HashSet::with_capacity(infos.len());
+    let mut keep_archives: HashSet<OsString> = HashSet::with_capacity(infos.len());
     let cache_path = cache.path.clone();
     for info in infos {
         progress.keep.inc(1);
@@ -72,14 +81,16 @@ pub fn run(config: &Config, progress: &Progress) {
         // also must not be treated as fully accounted for: keep its .narinfo
         // (it is still reachable) but warn and skip statistics/archive
         // tracking for the missing fields.
-        if let Some(url) = info.url() {
-            keep_archives.insert(cache_path.join(url));
+        if let Some(name) = info.url().and_then(|url| Path::new(url).file_name()) {
+            keep_archives.insert(name.to_owned());
         } else {
             eprintln!("Malformed narinfo (missing URL): {}", info.path.display());
         }
         file_size += info.file_size();
         nar_size += info.nar_size();
-        keep_infos.insert(info.path);
+        if let Some(name) = info.path.file_name() {
+            keep_infos.insert(name.to_owned());
+        }
         // Rebuilding the message string per item is more expensive than the
         // bookkeeping it reports on. Only re-format when the bar will
         // actually redraw.
@@ -97,8 +108,10 @@ pub fn run(config: &Config, progress: &Progress) {
         HumanBytes(file_size)
     ));
 
-    let rm_narinfo_size = sweep(&cache_path, &progress.rm_narinfo, config.dry_run, |path| {
-        path.extension().is_some_and(|ext| ext == "narinfo") && !keep_infos.contains(path)
+    let rm_narinfo_size = sweep(&cache_path, &progress.rm_narinfo, config.dry_run, |entry| {
+        let path = entry.path();
+        path.extension().is_some_and(|ext| ext == "narinfo")
+            && !keep_infos.contains(entry.file_name())
     });
     drop(keep_infos);
     progress
@@ -109,7 +122,7 @@ pub fn run(config: &Config, progress: &Progress) {
         &cache_path.join("nar"),
         &progress.rm_nar,
         config.dry_run,
-        |path| !keep_archives.contains(path),
+        |entry| !keep_archives.contains(entry.file_name()),
     );
     drop(keep_archives);
     progress
@@ -123,7 +136,7 @@ fn sweep(
     dir: &Path,
     progress: &ProgressBar,
     dry_run: bool,
-    should_delete: impl Fn(&Path) -> bool,
+    should_delete: impl Fn(&walkdir::DirEntry) -> bool,
 ) -> u64 {
     let mut total = 0;
     progress.set_length(0);
@@ -137,10 +150,10 @@ fn sweep(
                 continue;
             }
         };
-        let path = entry.path();
-        if !should_delete(path) {
+        if !should_delete(&entry) {
             continue;
         }
+        let path = entry.path();
         progress.inc_length(1);
 
         // entry.metadata() reuses the stat WalkDir already did; do not
