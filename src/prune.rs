@@ -1,5 +1,9 @@
 use std::{collections::HashSet, fs, path::Path, path::PathBuf};
 
+/// How often to rebuild progress-bar message strings. Indicatif redraws at
+/// most ~15 times a second; formatting more often than that is wasted work.
+const MSG_INTERVAL: u64 = 256;
+
 use indicatif::{HumanBytes, ProgressBar};
 use walkdir::WalkDir;
 
@@ -76,11 +80,16 @@ pub fn run(config: &Config, progress: &Progress) {
         file_size += info.file_size();
         nar_size += info.nar_size();
         keep_infos.insert(info.path);
-        progress.keep.set_message(format!(
-            "{} in {} archive files",
-            HumanBytes(nar_size),
-            HumanBytes(file_size)
-        ));
+        // Rebuilding the message string per item is more expensive than the
+        // bookkeeping it reports on. Only re-format when the bar will
+        // actually redraw.
+        if progress.keep.position().is_multiple_of(MSG_INTERVAL) {
+            progress.keep.set_message(format!(
+                "{} in {} archive files",
+                HumanBytes(nar_size),
+                HumanBytes(file_size)
+            ));
+        }
     }
     progress.keep.finish_with_message(format!(
         "{} in {} archive files",
@@ -134,9 +143,13 @@ fn sweep(
         }
         progress.inc_length(1);
 
-        if let Ok(meta) = fs::metadata(path) {
+        // entry.metadata() reuses the stat WalkDir already did; do not
+        // round-trip through the kernel a second time per file.
+        if let Ok(meta) = entry.metadata() {
             total += meta.len();
-            progress.set_message(format!("{}", HumanBytes(total)));
+            if progress.position().is_multiple_of(MSG_INTERVAL) {
+                progress.set_message(format!("{}", HumanBytes(total)));
+            }
         } else {
             eprintln!("Cannot stat {}", path.display());
         }
