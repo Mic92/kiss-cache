@@ -143,13 +143,13 @@ fn run(args: &Args) {
         // (it is still reachable) but warn and skip statistics/archive
         // tracking for the missing fields.
         keep_infos.insert(info.path.clone());
-        if let Some(url) = info.fields.get("URL") {
+        if let Some(url) = info.url() {
             keep_archives.insert(cache_path.join(url));
         } else {
             eprintln!("Malformed narinfo (missing URL): {}", info.path.display());
         }
-        file_size += parse_size(&info, "FileSize");
-        nar_size += parse_size(&info, "NarSize");
+        file_size += info.file_size();
+        nar_size += info.nar_size();
         progress_keep.set_message(format!(
             "{} in {} archive files",
             HumanBytes(nar_size),
@@ -178,15 +178,6 @@ fn run(args: &Args) {
     );
     drop(keep_archives);
     progress_rm_nar.finish_with_message(format!("{}", HumanBytes(rm_nar_size)));
-}
-
-/// Read a numeric narinfo field, treating missing or unparsable values as 0
-/// so that statistics never abort the run.
-fn parse_size(info: &binary_cache::Info, field: &str) -> u64 {
-    info.fields
-        .get(field)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0)
 }
 
 /// Walk `dir` (depth 1) and delete every entry for which `should_delete` returns true.

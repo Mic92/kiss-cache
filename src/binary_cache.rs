@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
-    fs::File,
-    io::{BufRead, BufReader, Error as IoError, ErrorKind},
+    fs,
+    io::{Error as IoError, ErrorKind},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -58,10 +58,27 @@ impl BinaryCache {
     }
 }
 
+/// The subset of narinfo fields the pruner actually needs.
+///
+/// `Info` is held in two long-lived `HashSet`s sized to the closure of all
+/// GC roots, which on a busy server can be hundreds of thousands of entries.
+/// Storing only what we use, in shared owned strings rather than a per-file
+/// `HashMap<String, String>`, keeps that memory bounded.
+#[derive(Clone, Debug, Default)]
+struct Fields {
+    url: Option<Box<str>>,
+    file_size: Option<u64>,
+    nar_size: Option<u64>,
+    // References and Deriver are 32-char hash prefixes of /nix/store paths;
+    // store the full strings so callers can join them onto /nix/store.
+    references: Box<[Box<str>]>,
+    deriver: Option<Box<str>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Info {
     pub path: PathBuf,
-    pub fields: Rc<HashMap<String, String>>,
+    fields: Rc<Fields>,
 }
 
 impl Info {
@@ -69,16 +86,30 @@ impl Info {
     ///
     /// Returns any I/O error from opening or reading the file.
     pub fn open(path: &Path) -> Result<Self, IoError> {
-        let f = File::open(path)?;
-        let r = BufReader::new(f);
+        // narinfo files are ~500 bytes. Reading the whole thing once and
+        // borrowing slices out of it is far cheaper than BufRead::lines(),
+        // which allocates a fresh String per line.
+        let buf = fs::read_to_string(path)?;
 
-        let mut fields = HashMap::new();
-        for line in r.lines() {
-            let line = line?;
-            if let Some(pos) = line.find(": ") {
-                let key = line[..pos].to_string();
-                let val = line[pos + 2..].trim_end().to_string();
-                fields.insert(key, val);
+        let mut fields = Fields::default();
+        for line in buf.lines() {
+            let Some((key, val)) = line.split_once(": ") else {
+                continue;
+            };
+            let val = val.trim_end();
+            match key {
+                "URL" => fields.url = Some(val.into()),
+                "FileSize" => fields.file_size = val.parse().ok(),
+                "NarSize" => fields.nar_size = val.parse().ok(),
+                "Deriver" if !val.is_empty() => fields.deriver = Some(val.into()),
+                "References" => {
+                    fields.references = val
+                        .split(' ')
+                        .filter(|s| !s.is_empty())
+                        .map(Into::into)
+                        .collect();
+                }
+                _ => {}
             }
         }
 
@@ -89,20 +120,26 @@ impl Info {
     }
 
     #[must_use]
+    pub fn url(&self) -> Option<&str> {
+        self.fields.url.as_deref()
+    }
+
+    #[must_use]
+    pub fn file_size(&self) -> u64 {
+        self.fields.file_size.unwrap_or(0)
+    }
+
+    #[must_use]
+    pub fn nar_size(&self) -> u64 {
+        self.fields.nar_size.unwrap_or(0)
+    }
+
+    #[must_use]
     pub fn deriver(&self) -> Option<&str> {
-        let deriver = self.fields.get("Deriver").map_or("", |s| s.as_str());
-        if deriver.is_empty() {
-            None
-        } else {
-            Some(deriver)
-        }
+        self.fields.deriver.as_deref()
     }
 
     pub fn references(&self) -> impl Iterator<Item = &str> {
-        self.fields
-            .get("References")
-            .map_or("", |s| s.as_str())
-            .split(' ')
-            .filter(|s| !s.is_empty())
+        self.fields.references.iter().map(AsRef::as_ref)
     }
 }
