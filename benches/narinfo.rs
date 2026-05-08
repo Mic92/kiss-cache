@@ -7,6 +7,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use indicatif::ProgressBar;
 use nix_cache_cut::{
     binary_cache::BinaryCache,
+    closure_cache,
     dep_scan::DependencyScanner,
     prune::{self, Config, Progress},
     store_hash::StoreHash,
@@ -78,44 +79,83 @@ fn bench_dep_scan(c: &mut Criterion) {
     group.bench_function("dep_scan_2000", |b| {
         b.iter(|| {
             let cache = BinaryCache::new(tmp.path());
+            let closures = closure_cache::Map::default();
             let mut scanner = DependencyScanner::new();
             scanner.enqueue(root);
-            black_box(scanner.scan(&cache, &progress));
+            black_box(scanner.scan(&cache, &closures, &progress));
         });
     });
     group.finish();
 }
 
-/// Full end-to-end dry-run: gcroots scan + dependency closure + keep-set
-/// construction + both sweep passes. Dry-run so the cache survives between
-/// iterations.
-fn bench_e2e_dry_run(c: &mut Criterion) {
-    const N: u32 = 2000;
-    const GARBAGE: u32 = 4000;
-    let tmp = tempfile::tempdir().unwrap();
-    let cache_dir = tmp.path().join("cache");
-    let gcroots_dir = tmp.path().join("gcroots");
-    build_cache(&cache_dir, N, GARBAGE);
+/// Build a synthetic cache + gcroots tree and return a dry-run Config.
+fn e2e_fixture(tmp: &std::path::Path, n: u32, garbage: u32) -> Config {
+    let cache_dir = tmp.join("cache");
+    let gcroots_dir = tmp.join("gcroots");
+    build_cache(&cache_dir, n, garbage);
     fs::create_dir_all(&gcroots_dir).unwrap();
     symlink(
         format!("/nix/store/{}-pkg", fake_hash(0)),
         gcroots_dir.join("root"),
     )
     .unwrap();
-
-    let config = Config {
+    Config {
         dry_run: true,
         cache_dir,
         gcroots: vec![gcroots_dir],
-    };
+    }
+}
+
+/// Full end-to-end dry-run: gcroots scan + dependency closure + keep-set
+/// construction + both sweep passes. Dry-run so the cache survives between
+/// iterations.
+///
+/// Two variants:
+/// - `cold`: empty persistent closure cache, every narinfo read from disk.
+/// - `warm`: closure cache pre-populated with the full reachable closure,
+///   so the dependency scan never touches the filesystem.
+fn bench_e2e_dry_run(c: &mut Criterion) {
+    const N: u32 = 2000;
+    const GARBAGE: u32 = 4000;
 
     let mut group = c.benchmark_group("prune");
     group.sample_size(200);
-    group.bench_function("e2e_dry_run_2000_keep_4000_drop", |b| {
+
+    // Cold: no closure cache file present.
+    let cold_tmp = tempfile::tempdir().unwrap();
+    let cold_config = e2e_fixture(cold_tmp.path(), N, GARBAGE);
+    group.bench_function("e2e_cold", |b| {
         b.iter(|| {
-            prune::run(black_box(&config), &Progress::hidden());
+            prune::run(black_box(&cold_config), &Progress::hidden());
         });
     });
+
+    // Warm: closure cache populated with everything reachable. We run the
+    // scanner once outside the measured loop to produce the same Infos that a
+    // real non-dry-run pass would persist.
+    let warm_tmp = tempfile::tempdir().unwrap();
+    let warm_config = e2e_fixture(warm_tmp.path(), N, GARBAGE);
+    {
+        let cache = BinaryCache::new(&warm_config.cache_dir);
+        let mut scanner = DependencyScanner::new();
+        scanner.enqueue(StoreHash::from_name(&format!("{}-pkg", fake_hash(0))).unwrap());
+        let infos = scanner.scan(
+            &cache,
+            &closure_cache::Map::default(),
+            &ProgressBar::hidden(),
+        );
+        closure_cache::save(
+            &closure_cache::default_path(&warm_config.cache_dir),
+            infos.iter().map(|(h, i)| (*h, i)),
+        )
+        .unwrap();
+    }
+    group.bench_function("e2e_warm", |b| {
+        b.iter(|| {
+            prune::run(black_box(&warm_config), &Progress::hidden());
+        });
+    });
+
     group.finish();
 }
 

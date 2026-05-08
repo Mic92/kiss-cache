@@ -33,10 +33,20 @@ impl StoreHash {
     }
 
     fn from_prefix(bytes: &[u8]) -> Option<Self> {
-        let hash: [u8; 32] = bytes.get(..32)?.try_into().ok()?;
+        Self::from_bytes(bytes.get(..32)?.try_into().ok()?)
+    }
+
+    /// Validate a raw 32-byte buffer as a store hash.
+    #[must_use]
+    pub fn from_bytes(hash: [u8; 32]) -> Option<Self> {
         hash.iter()
             .all(u8::is_ascii_alphanumeric)
             .then_some(StoreHash(hash))
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 
     #[must_use]

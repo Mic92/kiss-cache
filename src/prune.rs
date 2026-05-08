@@ -10,10 +10,18 @@ use rustc_hash::FxHashSet;
 /// most ~15 times a second; formatting more often than that is wasted work.
 const MSG_INTERVAL: u64 = 256;
 
+/// `<hash>.narinfo` as an `OsString`, built without `format!`.
+fn narinfo_name(hash: StoreHash) -> OsString {
+    let mut s = OsString::with_capacity(32 + 8);
+    s.push(hash.as_str());
+    s.push(".narinfo");
+    s
+}
+
 use indicatif::{HumanBytes, ProgressBar};
 use walkdir::WalkDir;
 
-use crate::{binary_cache, dep_scan, gcroots};
+use crate::{binary_cache, closure_cache, dep_scan, gcroots, store_hash::StoreHash};
 
 /// Inputs to a pruning run.
 pub struct Config {
@@ -58,12 +66,20 @@ pub fn run(config: &Config, progress: &Progress) {
 
     // Scan gcroots dependencies
     let cache = binary_cache::BinaryCache::new(&config.cache_dir);
+    let closure_cache_path = closure_cache::default_path(&config.cache_dir);
+    let closures = closure_cache::load(&closure_cache_path);
     let mut scanner = dep_scan::DependencyScanner::new();
     for hash in store_hashes {
         scanner.enqueue(hash);
     }
-    let infos = scanner.scan(&cache, &progress.scanner);
+    let infos = scanner.scan(&cache, &closures, &progress.scanner);
+    drop(closures);
     progress.scanner.finish();
+    if !config.dry_run
+        && let Err(e) = closure_cache::save(&closure_cache_path, infos.iter().map(|(h, i)| (*h, i)))
+    {
+        eprintln!("Cannot write closure cache: {e}");
+    }
 
     // Statistics
     let (mut file_size, mut nar_size) = (0u64, 0u64);
@@ -78,22 +94,24 @@ pub fn run(config: &Config, progress: &Progress) {
     let mut keep_archives: FxHashSet<OsString> =
         FxHashSet::with_capacity_and_hasher(infos.len(), rustc_hash::FxBuildHasher);
     let cache_path = cache.path.clone();
-    for info in infos {
+    for (hash, info) in infos {
         progress.keep.inc(1);
         // A truncated or hand-edited narinfo must not abort the run, but it
         // also must not be treated as fully accounted for: keep its .narinfo
         // (it is still reachable) but warn and skip statistics/archive
         // tracking for the missing fields.
-        if let Some(name) = info.url().and_then(|url| Path::new(url).file_name()) {
+        if let Some(name) = info
+            .url
+            .as_deref()
+            .and_then(|url| Path::new(url).file_name())
+        {
             keep_archives.insert(name.to_owned());
         } else {
-            eprintln!("Malformed narinfo (missing URL): {}", info.path.display());
+            eprintln!("Malformed narinfo (missing URL): {hash}.narinfo");
         }
-        file_size += info.file_size();
-        nar_size += info.nar_size();
-        if let Some(name) = info.path.file_name() {
-            keep_infos.insert(name.to_owned());
-        }
+        file_size += info.file_size;
+        nar_size += info.nar_size;
+        keep_infos.insert(narinfo_name(hash));
         // Rebuilding the message string per item is more expensive than the
         // bookkeeping it reports on. Only re-format when the bar will
         // actually redraw.

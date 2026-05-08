@@ -7,7 +7,8 @@ use std::{
 use indicatif::ProgressBar;
 use rustc_hash::FxHashSet;
 
-use crate::binary_cache::{BinaryCache, Info};
+use crate::binary_cache::{BinaryCache, NarInfo};
+use crate::closure_cache;
 use crate::store_hash::StoreHash;
 
 pub struct DependencyScanner {
@@ -36,19 +37,22 @@ impl DependencyScanner {
         }
     }
 
-    /// Walk the closure of all enqueued store hashes and return the parsed
-    /// `Info` for every one whose narinfo exists in the cache.
+    /// Walk the closure of all enqueued store hashes and return parsed
+    /// metadata for every one whose narinfo exists in the cache (or is
+    /// already in `closures`).
     ///
-    /// The cost is dominated by opening and reading one `.narinfo` per store
-    /// hash, which the kernel can serve concurrently. Workers parse files in
-    /// parallel; the coordinator owns `seen`, dedups, and dispatches new
-    /// hashes discovered in `References`/`Deriver`.
-    pub fn scan(mut self, cache: &BinaryCache, progress: &ProgressBar) -> Vec<Info> {
+    /// Hashes already present in `closures` are answered without touching
+    /// the filesystem; the rest are read by a worker pool, since the cost is
+    /// dominated by opening one `.narinfo` per hash and the kernel can serve
+    /// those reads concurrently. The coordinator owns the visited set, dedups,
+    /// and dispatches new hashes discovered in `References`/`Deriver`.
+    pub fn scan(
+        mut self,
+        cache: &BinaryCache,
+        closures: &closure_cache::Map,
+        progress: &ProgressBar,
+    ) -> Vec<(StoreHash, NarInfo)> {
         let workers = available_parallelism().map_or(1, std::num::NonZero::get);
-        if workers <= 1 {
-            return self.scan_serial(cache, progress);
-        }
-
         // seen already holds all initially-enqueued hashes; the closure can
         // only grow from there. Reserving avoids repeated reallocation.
         let mut found = Vec::with_capacity(self.seen.len());
@@ -57,7 +61,7 @@ impl DependencyScanner {
             // One channel per worker; the coordinator round-robins dispatches
             // and never gives a worker more than two outstanding items, so a
             // slow narinfo read cannot starve the rest of the pool.
-            let (done_tx, done_rx) = mpsc::channel::<Option<Info>>();
+            let (done_tx, done_rx) = mpsc::channel::<(StoreHash, Option<NarInfo>)>();
             let mut work_txs = Vec::with_capacity(workers);
             for _ in 0..workers {
                 let (work_tx, work_rx) = mpsc::channel::<StoreHash>();
@@ -66,7 +70,7 @@ impl DependencyScanner {
                 scope.spawn(move || {
                     while let Ok(hash) = work_rx.recv() {
                         let info = cache.get_info_by_hash(hash).ok();
-                        if done_tx.send(info).is_err() {
+                        if done_tx.send((hash, info)).is_err() {
                             return;
                         }
                     }
@@ -81,6 +85,14 @@ impl DependencyScanner {
                 while in_flight < high_water
                     && let Some(hash) = self.queue.pop_front()
                 {
+                    // The persistent closure cache answers without I/O.
+                    if let Some(info) = closures.get(&hash) {
+                        for hash in info.references.iter().chain(&info.deriver) {
+                            self.enqueue(*hash);
+                        }
+                        found.push((hash, info.clone()));
+                        continue;
+                    }
                     if work_txs[next_worker % workers].send(hash).is_err() {
                         return;
                     }
@@ -91,37 +103,22 @@ impl DependencyScanner {
                     break;
                 }
 
-                let Ok(result) = done_rx.recv() else { break };
+                let Ok((hash, result)) = done_rx.recv() else {
+                    break;
+                };
                 in_flight -= 1;
                 progress.set_length(self.seen.len() as u64);
                 progress.set_position((self.seen.len() - self.queue.len() - in_flight) as u64);
                 let Some(info) = result else { continue };
-                for hash in info.references().chain(info.deriver()) {
-                    self.enqueue(hash);
+                for hash in info.references.iter().chain(&info.deriver) {
+                    self.enqueue(*hash);
                 }
-                found.push(info);
+                found.push((hash, info));
             }
             // Closing the work channels makes workers exit their recv loop.
             drop(work_txs);
         });
 
-        found
-    }
-
-    fn scan_serial(mut self, cache: &BinaryCache, progress: &ProgressBar) -> Vec<Info> {
-        let mut found = Vec::with_capacity(self.seen.len());
-        while let Some(hash) = self.queue.pop_front() {
-            progress.set_position((self.seen.len() - self.queue.len()) as u64);
-            progress.set_length(self.seen.len() as u64);
-
-            let Ok(info) = cache.get_info_by_hash(hash) else {
-                continue;
-            };
-            for hash in info.references().chain(info.deriver()) {
-                self.enqueue(hash);
-            }
-            found.push(info);
-        }
         found
     }
 }
