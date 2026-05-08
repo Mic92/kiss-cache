@@ -38,25 +38,17 @@
         default = ./nixos/default.nix;
       };
 
-      checks = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
-        system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in
+      checks = eachSystem (
+        pkgs:
         {
+          inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) kiss-cache;
+        }
+        # The VM test only runs on Linux.
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           nixos = pkgs.callPackage ./nixos/test.nix {
             nixosModule = self.nixosModules.default;
           };
         }
       );
-
-      hydraJobs = {
-        kiss-cache = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
-          system: lib.hydraJob self.packages.${system}.default
-        );
-        tests = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
-          system: lib.hydraJob self.checks.${system}.nixos
-        );
-      };
     };
 }
