@@ -56,10 +56,46 @@
         };
       });
 
-      overlays.default = _: prev: { nix-cache-cut = mkPackage prev; };
+      nixosModules = {
+        nix-cache-cut = ./nixos/nix-cache-cut.nix;
+        nix-cache-serve = ./nixos/nix-cache-serve.nix;
+        default =
+          { config, pkgs, ... }:
+          let
+            serve = config.services.nix-cache-serve;
+          in
+          {
+            imports = [
+              ./nixos/nix-cache-cut.nix
+              ./nixos/nix-cache-serve.nix
+            ];
+            services.nix-cache-cut = {
+              package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+              # When serving with writers, their PUT marker files are roots.
+              gcRoots = lib.mkIf (serve.enable && serve.writers != [ ]) [ "${serve.cacheDir}/gcroots" ];
+            };
+          };
+      };
 
-      hydraJobs.nix-cache-cut = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
-        system: lib.hydraJob self.packages.${system}.default
+      checks = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          nixos = pkgs.callPackage ./nixos/test.nix {
+            nixosModule = self.nixosModules.default;
+          };
+        }
       );
+
+      hydraJobs = {
+        nix-cache-cut = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
+          system: lib.hydraJob self.packages.${system}.default
+        );
+        tests = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
+          system: lib.hydraJob self.checks.${system}.nixos
+        );
+      };
     };
 }
