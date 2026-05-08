@@ -1,0 +1,151 @@
+use std::{collections::HashSet, fs, path::Path, path::PathBuf};
+
+use indicatif::{HumanBytes, ProgressBar};
+use walkdir::WalkDir;
+
+use crate::{binary_cache, dep_scan, gcroots};
+
+/// Inputs to a pruning run.
+pub struct Config {
+    pub dry_run: bool,
+    pub cache_dir: PathBuf,
+    pub gcroots: Vec<PathBuf>,
+}
+
+/// Progress reporters for each phase. Pass [`Progress::hidden`] for headless
+/// runs (tests, benchmarks).
+pub struct Progress {
+    pub gcroots: ProgressBar,
+    pub scanner: ProgressBar,
+    pub keep: ProgressBar,
+    pub rm_narinfo: ProgressBar,
+    pub rm_nar: ProgressBar,
+}
+
+impl Progress {
+    #[must_use]
+    pub fn hidden() -> Self {
+        Progress {
+            gcroots: ProgressBar::hidden(),
+            scanner: ProgressBar::hidden(),
+            keep: ProgressBar::hidden(),
+            rm_narinfo: ProgressBar::hidden(),
+            rm_nar: ProgressBar::hidden(),
+        }
+    }
+}
+
+/// Run a full prune: scan GC roots, walk the closure, delete unreachable
+/// narinfo and nar files. Honors `config.dry_run`.
+pub fn run(config: &Config, progress: &Progress) {
+    // Scan garbage-collector roots
+    let mut gcroots = gcroots::GcRoots::new();
+    for gcroot in &config.gcroots {
+        gcroots.enqueue(gcroot);
+    }
+    let store_paths = gcroots.scan(&progress.gcroots);
+    progress.gcroots.finish();
+
+    // Scan gcroots dependencies
+    let mut cache = binary_cache::BinaryCache::new(&config.cache_dir);
+    let mut scanner = dep_scan::DependencyScanner::new();
+    for path in store_paths {
+        scanner.enqueue(path);
+    }
+    let infos = scanner.scan(&mut cache, &progress.scanner);
+    progress.scanner.finish();
+
+    // Statistics
+    let (mut file_size, mut nar_size) = (0u64, 0u64);
+    // Set of files to keep
+    progress.keep.set_length(infos.len() as u64);
+    let mut keep_infos = HashSet::with_capacity(infos.len());
+    let mut keep_archives = HashSet::with_capacity(infos.len());
+    let cache_path = cache.path.clone();
+    for info in infos {
+        progress.keep.inc(1);
+        // A truncated or hand-edited narinfo must not abort the run, but it
+        // also must not be treated as fully accounted for: keep its .narinfo
+        // (it is still reachable) but warn and skip statistics/archive
+        // tracking for the missing fields.
+        if let Some(url) = info.url() {
+            keep_archives.insert(cache_path.join(url));
+        } else {
+            eprintln!("Malformed narinfo (missing URL): {}", info.path.display());
+        }
+        file_size += info.file_size();
+        nar_size += info.nar_size();
+        keep_infos.insert(info.path);
+        progress.keep.set_message(format!(
+            "{} in {} archive files",
+            HumanBytes(nar_size),
+            HumanBytes(file_size)
+        ));
+    }
+    progress.keep.finish_with_message(format!(
+        "{} in {} archive files",
+        HumanBytes(nar_size),
+        HumanBytes(file_size)
+    ));
+
+    let rm_narinfo_size = sweep(&cache_path, &progress.rm_narinfo, config.dry_run, |path| {
+        path.extension().is_some_and(|ext| ext == "narinfo") && !keep_infos.contains(path)
+    });
+    drop(keep_infos);
+    progress
+        .rm_narinfo
+        .finish_with_message(format!("{}", HumanBytes(rm_narinfo_size)));
+
+    let rm_nar_size = sweep(
+        &cache_path.join("nar"),
+        &progress.rm_nar,
+        config.dry_run,
+        |path| !keep_archives.contains(path),
+    );
+    drop(keep_archives);
+    progress
+        .rm_nar
+        .finish_with_message(format!("{}", HumanBytes(rm_nar_size)));
+}
+
+/// Walk `dir` (depth 1) and delete every entry for which `should_delete`
+/// returns true. Returns total size of matched files. Honors `dry_run`.
+fn sweep(
+    dir: &Path,
+    progress: &ProgressBar,
+    dry_run: bool,
+    should_delete: impl Fn(&Path) -> bool,
+) -> u64 {
+    let mut total = 0;
+    progress.set_length(0);
+    for entry in WalkDir::new(dir).min_depth(1).max_depth(1) {
+        // An entry can become unreadable mid-scan (concurrent deletion,
+        // permissions); skip rather than abort the sweep.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("Cannot read cache entry: {e}");
+                continue;
+            }
+        };
+        let path = entry.path();
+        if !should_delete(path) {
+            continue;
+        }
+        progress.inc_length(1);
+
+        if let Ok(meta) = fs::metadata(path) {
+            total += meta.len();
+            progress.set_message(format!("{}", HumanBytes(total)));
+        } else {
+            eprintln!("Cannot stat {}", path.display());
+        }
+
+        if !dry_run && let Err(e) = fs::remove_file(path) {
+            eprintln!("Cannot remove {}: {}", path.display(), e);
+        }
+
+        progress.inc(1);
+    }
+    total
+}

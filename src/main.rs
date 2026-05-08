@@ -1,9 +1,7 @@
-use std::{collections::HashSet, fs, path::Path, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode};
 
-use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
-use walkdir::WalkDir;
-
-use nix_cache_cut::{binary_cache, dep_scan, gcroots};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use nix_cache_cut::prune::{self, Config, Progress};
 
 const USAGE: &str = "\
 Trim Nix binary caches according to GC roots
@@ -19,17 +17,11 @@ Options:
   -h, --help     Print help
   -V, --version  Print version";
 
-struct Args {
-    dry_run: bool,
-    cache_dir: String,
-    gcroots: Vec<String>,
-}
-
-fn parse_args() -> Result<Args, lexopt::Error> {
+fn parse_args() -> Result<Config, lexopt::Error> {
     use lexopt::prelude::*;
 
     let mut dry_run = false;
-    let mut positional = Vec::new();
+    let mut positional: Vec<PathBuf> = Vec::new();
     let mut parser = lexopt::Parser::from_env();
     while let Some(arg) = parser.next()? {
         match arg {
@@ -42,7 +34,7 @@ fn parse_args() -> Result<Args, lexopt::Error> {
                 println!("nix-cache-cut {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
-            Value(v) => positional.push(v.string()?),
+            Value(v) => positional.push(v.into()),
             _ => return Err(arg.unexpected()),
         }
     }
@@ -51,31 +43,19 @@ fn parse_args() -> Result<Args, lexopt::Error> {
     let cache_dir = positional
         .next()
         .ok_or("missing required argument CACHEDIR")?;
-    let mut gcroots: Vec<String> = positional.collect();
+    let mut gcroots: Vec<PathBuf> = positional.collect();
     if gcroots.is_empty() {
-        gcroots.push("/nix/var/nix/gcroots".to_owned());
+        gcroots.push("/nix/var/nix/gcroots".into());
     }
 
-    Ok(Args {
+    Ok(Config {
         dry_run,
         cache_dir,
         gcroots,
     })
 }
 
-fn main() -> ExitCode {
-    let args = match parse_args() {
-        Ok(args) => args,
-        Err(e) => {
-            eprintln!("error: {e}\n\n{USAGE}");
-            return ExitCode::from(2);
-        }
-    };
-    run(&args);
-    ExitCode::SUCCESS
-}
-
-fn run(args: &Args) {
+fn make_progress(dry_run: bool) -> Progress {
     let make_spinner = |color| {
         let template = format!(
             "{{spinner}} {{prefix:.bold.dim}} {{wide_bar:.{color}}} [{{pos:.bold.dim}}/{{len:.bold}}] {{msg}}"
@@ -87,133 +67,33 @@ fn run(args: &Args) {
             .unwrap_or_else(|_| ProgressStyle::default_bar())
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
     };
-    let progress = MultiProgress::new();
-    let progress_gcroots = progress.add(ProgressBar::new(0));
-    progress_gcroots.set_prefix("Scanning GCROOTS");
-    progress_gcroots.set_style(make_spinner("green.dim"));
-    let progress_scanner = progress.add(ProgressBar::new(1));
-    progress_scanner.set_prefix("Scanning dependencies");
-    progress_scanner.set_style(make_spinner("green"));
-    progress_scanner.tick();
-    let progress_keep = progress.add(ProgressBar::new(1));
-    progress_keep.set_prefix("Retaining archives");
-    progress_keep.set_style(make_spinner("yellow"));
-    progress_keep.tick();
-    let msg_prefix = if args.dry_run { "NOT " } else { "" };
-    let progress_rm_narinfo = progress.add(ProgressBar::new(1));
-    progress_rm_narinfo.set_prefix(format!("{msg_prefix}Deleting .narinfo files"));
-    progress_rm_narinfo.set_style(make_spinner("red"));
-    progress_rm_narinfo.tick();
-    let progress_rm_nar = progress.add(ProgressBar::new(1));
-    progress_rm_nar.set_prefix(format!("{msg_prefix}Deleting .nar files"));
-    progress_rm_nar.set_style(make_spinner("red.dim"));
-    progress_rm_nar.tick();
-
-    // Scan garbage-collector roots
-    let mut gcroots = gcroots::GcRoots::new();
-    for gcroot in &args.gcroots {
-        gcroots.enqueue(gcroot);
+    let multi = MultiProgress::new();
+    let bar = |prefix: String, color, length| {
+        let bar = multi.add(ProgressBar::new(length));
+        bar.set_prefix(prefix);
+        bar.set_style(make_spinner(color));
+        bar.tick();
+        bar
+    };
+    let msg_prefix = if dry_run { "NOT " } else { "" };
+    Progress {
+        gcroots: bar("Scanning GCROOTS".into(), "green.dim", 0),
+        scanner: bar("Scanning dependencies".into(), "green", 1),
+        keep: bar("Retaining archives".into(), "yellow", 1),
+        rm_narinfo: bar(format!("{msg_prefix}Deleting .narinfo files"), "red", 1),
+        rm_nar: bar(format!("{msg_prefix}Deleting .nar files"), "red.dim", 1),
     }
-    let store_paths = gcroots.scan(&progress_gcroots);
-    progress_gcroots.finish();
-
-    // Construct cache abstraction
-    let mut cache = binary_cache::BinaryCache::new(&args.cache_dir);
-    // Scan gcroots dependencies
-    let mut scanner = dep_scan::DependencyScanner::new();
-    for path in store_paths {
-        scanner.enqueue(path);
-    }
-    let infos = scanner.scan(&mut cache, &progress_scanner);
-    progress_scanner.finish();
-
-    // Statistics
-    let (mut file_size, mut nar_size) = (0u64, 0u64);
-    // Set of files to keep
-    progress_keep.set_length(infos.len() as u64);
-    let mut keep_infos = HashSet::with_capacity(infos.len());
-    let mut keep_archives = HashSet::with_capacity(infos.len());
-    let cache_path = cache.path.clone();
-    for info in infos {
-        progress_keep.inc(1);
-        // A truncated or hand-edited narinfo must not abort the run, but it
-        // also must not be treated as fully accounted for: keep its .narinfo
-        // (it is still reachable) but warn and skip statistics/archive
-        // tracking for the missing fields.
-        if let Some(url) = info.url() {
-            keep_archives.insert(cache_path.join(url));
-        } else {
-            eprintln!("Malformed narinfo (missing URL): {}", info.path.display());
-        }
-        file_size += info.file_size();
-        nar_size += info.nar_size();
-        keep_infos.insert(info.path);
-        progress_keep.set_message(format!(
-            "{} in {} archive files",
-            HumanBytes(nar_size),
-            HumanBytes(file_size)
-        ));
-    }
-    progress_keep.finish_with_message(format!(
-        "{} in {} archive files",
-        HumanBytes(nar_size),
-        HumanBytes(file_size)
-    ));
-
-    let rm_narinfo_size = sweep(&cache_path, &progress_rm_narinfo, args.dry_run, |path| {
-        path.extension().is_some_and(|ext| ext == "narinfo") && !keep_infos.contains(path)
-    });
-    drop(keep_infos);
-    progress_rm_narinfo.finish_with_message(format!("{}", HumanBytes(rm_narinfo_size)));
-
-    let rm_nar_size = sweep(
-        &cache_path.join("nar"),
-        &progress_rm_nar,
-        args.dry_run,
-        |path| !keep_archives.contains(path),
-    );
-    drop(keep_archives);
-    progress_rm_nar.finish_with_message(format!("{}", HumanBytes(rm_nar_size)));
 }
 
-/// Walk `dir` (depth 1) and delete every entry for which `should_delete` returns true.
-/// Returns total size of matched files. Honors `dry_run`.
-fn sweep(
-    dir: &Path,
-    progress: &ProgressBar,
-    dry_run: bool,
-    should_delete: impl Fn(&Path) -> bool,
-) -> u64 {
-    let mut total = 0;
-    progress.set_length(0);
-    for entry in WalkDir::new(dir).min_depth(1).max_depth(1) {
-        // An entry can become unreadable mid-scan (concurrent deletion,
-        // permissions); skip rather than abort the sweep.
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                eprintln!("Cannot read cache entry: {e}");
-                continue;
-            }
-        };
-        let path = entry.path();
-        if !should_delete(path) {
-            continue;
+fn main() -> ExitCode {
+    let config = match parse_args() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("error: {e}\n\n{USAGE}");
+            return ExitCode::from(2);
         }
-        progress.inc_length(1);
-
-        if let Ok(meta) = fs::metadata(path) {
-            total += meta.len();
-            progress.set_message(format!("{}", HumanBytes(total)));
-        } else {
-            eprintln!("Cannot stat {}", path.display());
-        }
-
-        if !dry_run && let Err(e) = fs::remove_file(path) {
-            eprintln!("Cannot remove {}: {}", path.display(), e);
-        }
-
-        progress.inc(1);
-    }
-    total
+    };
+    let progress = make_progress(config.dry_run);
+    prune::run(&config, &progress);
+    ExitCode::SUCCESS
 }
