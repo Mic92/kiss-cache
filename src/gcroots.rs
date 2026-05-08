@@ -1,7 +1,10 @@
 use indicatif::ProgressBar;
 use rustc_hash::FxHashSet;
-use std::{collections::VecDeque, fs, path::PathBuf};
-use walkdir::WalkDir;
+use std::{
+    collections::VecDeque,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::store_hash::StoreHash;
 
@@ -39,34 +42,53 @@ impl GcRoots {
         }
     }
 
+    /// Walk all enqueued roots, follow indirect roots (directories and
+    /// symlink chains), and return the set of store hashes they point at.
     #[must_use]
     pub fn scan(mut self, progress: &ProgressBar) -> FxHashSet<StoreHash> {
         while let Some(path) = self.queue.pop_front() {
             progress.set_position((self.seen.len() - self.queue.len()) as u64);
             progress.set_length(self.seen.len() as u64);
 
-            for entry in WalkDir::new(path).follow_links(false).into_iter().flatten() {
-                if !entry.path_is_symlink() {
-                    continue;
-                }
-                // The symlink may vanish between WalkDir's stat and our
-                // read_link; skip it rather than aborting the whole sweep.
-                let Ok(target) = fs::read_link(entry.path()) else {
-                    eprintln!("Cannot read symlink {}", entry.path().display());
-                    continue;
-                };
-                // Relative symlink targets are relative to the symlink's
-                // parent directory, not the process CWD. min_depth(0) means
-                // entry can be the WalkDir root itself, which may have no
-                // parent; fall back to enqueueing the relative path verbatim.
-                let target = match (target.is_absolute(), entry.path().parent()) {
-                    (false, Some(parent)) => parent.join(target),
-                    _ => target,
-                };
-                self.enqueue(target);
+            // The path can vanish or become unreadable between being
+            // enqueued and being visited; skip rather than abort.
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_symlink() {
+                self.follow_symlink(&path);
+            } else if meta.is_dir() {
+                self.recurse_into(&path);
             }
+            // Plain files (e.g. lock files under gcroots/profiles) carry no
+            // root information.
         }
 
         self.store_hashes
+    }
+
+    fn follow_symlink(&mut self, path: &Path) {
+        let Ok(target) = fs::read_link(path) else {
+            eprintln!("Cannot read symlink {}", path.display());
+            return;
+        };
+        // Relative symlink targets are relative to the symlink's parent
+        // directory, not the process CWD. A root path may have no parent;
+        // fall back to enqueueing the relative target verbatim.
+        let target = match (target.is_absolute(), path.parent()) {
+            (false, Some(parent)) => parent.join(target),
+            _ => target,
+        };
+        self.enqueue(target);
+    }
+
+    fn recurse_into(&mut self, dir: &Path) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            eprintln!("Cannot read directory {}", dir.display());
+            return;
+        };
+        for entry in entries.flatten() {
+            self.enqueue(entry.path());
+        }
     }
 }

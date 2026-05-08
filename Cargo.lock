@@ -399,7 +399,6 @@ dependencies = [
  "lexopt",
  "rustc-hash",
  "tempfile",
- "walkdir",
 ]
 
 [[package]]
