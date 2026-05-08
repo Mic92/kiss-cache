@@ -122,6 +122,19 @@ $ curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
 Without the marker, the pushed closure is deleted on the next prune
 unless it is reachable from one of the cache server's local GC roots.
 
+Set `fallbackCache` to chain through to an upstream cache: a local
+miss is fetched from there and stored, so the next request for the
+same path is a local hit.
+
+```nix
+services.kiss-cache-serve.fallbackCache = "https://cache.nixos.org";
+```
+
+Clients receive the upstream's signature unmodified; add its public
+key to `trusted-public-keys` alongside this cache's own. Stored
+entries are not registered as gcroots and are reclaimed by the next
+prune unless reachable; they are refetched on demand.
+
 ## Setting up mutual TLS
 
 Both sides authenticate with a certificate: the server proves who it is
