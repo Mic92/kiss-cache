@@ -32,15 +32,35 @@ testers.runNixOSTest {
     { pkgs, ... }:
     {
       imports = [ nixosModule ];
-      services.kiss-cache-update.enable = true;
-      services.kiss-cache-update-tor = {
-        enable = true;
-        onion = "exampleexampleexampleexampleexampleexampleexampleexample.onion";
-        # Format: descriptor:x25519:<base32 private key>. Tor only
-        # checks shape at startup; this dummy key never has to match a
-        # real onion since the test cannot reach the directory
-        # authorities anyway.
-        clientAuthFile = pkgs.writeText "onion-auth" "descriptor:x25519:RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR";
+      # Format: descriptor:x25519:<base32 private key>. Tor only
+      # checks shape at startup; this dummy key never has to match a
+      # real onion since the test cannot reach the directory
+      # authorities anyway.
+      services = {
+        kiss-cache-update.enable = true;
+        kiss-cache-update-tor = {
+          enable = true;
+          onion = "readreadreadreadreadreadreadreadreadreadreadreadreadread.onion";
+          clientAuthFile = pkgs.writeText "onion-auth-read" "descriptor:x25519:RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR";
+        };
+        kiss-cache-publish = {
+          enable = true;
+          systems = [
+            {
+              flakeRef = "path:/dev/null";
+              marker = "x";
+            }
+          ];
+        };
+        kiss-cache-publish-tor = {
+          enable = true;
+          onion = "writewritewritewritewritewritewritewritewritewritewrite.onion";
+          clientAuthFile = pkgs.writeText "onion-auth-write" "descriptor:x25519:WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW";
+        };
+      };
+      systemd.timers = {
+        kiss-cache-publish.enable = false;
+        kiss-cache-update.enable = false;
       };
     };
 
@@ -96,16 +116,26 @@ testers.runNixOSTest {
     with subtest("target torrc registers client authorization"):
         rc = torrc(target)
         assert "ClientOnionAuthDir" in rc, rc
-        # Tor links the auth file into its auth dir on unit start.
-        target.succeed("ls /run/tor/ClientOnionAuthDir/ | grep -q auth_private")
-
-    with subtest("kiss-cache-update points at the onion via the SOCKS proxy"):
-        unit = target.succeed("systemctl show kiss-cache-update.service -p Environment")
-        assert "socks5h://127.0.0.1:9050" in unit, unit
-        script = target.succeed(
-            "cat $(systemctl show kiss-cache-update.service -p ExecStart "
-            "| grep -oP 'path=\K\S+')"
+        # Tor's preStart links the auth files into its private
+        # RuntimeDirectory; not observable from outside. Assert both
+        # onions are wired into the preStart shell script instead.
+        pre = target.succeed(
+            "cat $(systemctl show tor.service -p ExecStartPre "
+            "| grep -oP 'argv\\[\\]=\\K\\S*ExecStartPre\\S*')"
         )
-        assert ".onion" in script, script
+        assert "readreadread" in pre and "writewritewrite" in pre, pre
+
+    with subtest("kiss-cache-update and -publish point at the onions via SOCKS"):
+        for unit, onion in [
+            ("kiss-cache-update", "readreadread"),
+            ("kiss-cache-publish", "writewritewrite"),
+        ]:
+            env = target.succeed(f"systemctl show {unit}.service -p Environment")
+            assert "socks5h://127.0.0.1:9050" in env, env
+            script = target.succeed(
+                f"cat $(systemctl show {unit}.service -p ExecStart "
+                "| grep -oP 'path=\K\S+')"
+            )
+            assert onion in script, script
   '';
 }

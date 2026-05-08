@@ -12,8 +12,10 @@ in
     ./kiss-cache.nix
     ./kiss-cache-serve.nix
     ./kiss-cache-update.nix
+    ./kiss-cache-publish.nix
     ./kiss-cache-serve-tor.nix
     ./kiss-cache-update-tor.nix
+    ./kiss-cache-publish-tor.nix
   ];
 
   # When serving with writers, their PUT marker files are roots.

@@ -55,8 +55,25 @@ testers.runNixOSTest {
       imports = [ nixosModule ];
 
       virtualisation.writableStore = true;
-      nix.settings.experimental-features = [ "nix-command" ];
+      nix.settings.experimental-features = [
+        "nix-command"
+        "flakes"
+      ];
       networking.firewall.allowedTCPPorts = [ 443 ];
+
+      # Local-mode publish: colocated with the cache, no HTTP.
+      services.kiss-cache-publish = {
+        enable = true;
+        cacheDir = "/var/lib/nix-cache";
+        secretKeyFile = "/etc/nix/secret-key";
+        systems = [
+          {
+            flakeRef = "path:/tmp/publish-flake#default";
+            marker = "local-published";
+          }
+        ];
+      };
+      systemd.timers.kiss-cache-publish.enable = false;
 
       systemd.tmpfiles.rules = [
         "d /var/lib/nix-cache 0755 nginx nginx -"
@@ -101,7 +118,10 @@ testers.runNixOSTest {
       imports = [ nixosModule ];
       virtualisation.writableStore = true;
       nix.settings = {
-        experimental-features = [ "nix-command" ];
+        experimental-features = [
+          "nix-command"
+          "flakes"
+        ];
         substituters = lib.mkForce [
           "https://cache?tls-certificate=${certs}/client.pem&tls-private-key=${certs}/client.key"
         ];
@@ -116,8 +136,26 @@ testers.runNixOSTest {
         tlsPrivateKey = "${certs}/client.key";
         tlsCACertificate = "${certs}/ca.pem";
       };
-      # Don't let the timer fire on its own mid-test.
+      services.kiss-cache-publish = {
+        enable = true;
+        cacheUrl = "https://cache";
+        tlsCertificate = "${certs}/writer.pem";
+        tlsPrivateKey = "${certs}/writer.key";
+        tlsCACertificate = "${certs}/ca.pem";
+        # The flakeRef is patched at runtime: an isolated test cannot
+        # fetch a remote flake, and the toplevel of a NixOS test VM
+        # cannot be re-built inside itself. The subtest writes a local
+        # path: flake instead.
+        systems = [
+          {
+            flakeRef = "path:/tmp/publish-flake#default";
+            marker = "published";
+          }
+        ];
+      };
+      # Don't let the timers fire on their own mid-test.
       systemd.timers.kiss-cache-update.enable = false;
+      systemd.timers.kiss-cache-publish.enable = false;
     };
 
   testScript = ''
@@ -333,6 +371,34 @@ testers.runNixOSTest {
         )
         assert "needs a reboot" in out, f"boot change not detected:\n{out}"
         importer.succeed(f"nix-env --profile /nix/var/nix/profiles/system --set {before}")
+
+    flake_nix = base64.b64encode((
+        '{ outputs = _: { packages.x86_64-linux.default = '
+        'derivation { name = "published"; system = "x86_64-linux"; '
+        'builder = "/bin/sh"; args = ["-c" "echo published > $out"]; }; }; }'
+    ).encode()).decode()
+
+    with subtest("kiss-cache-publish over HTTP builds, pushes and registers a marker"):
+        importer.succeed(
+            "mkdir -p /tmp/publish-flake; "
+            f"echo {flake_nix} | base64 -d > /tmp/publish-flake/flake.nix"
+        )
+        importer.succeed("kiss-cache-publish")
+        marker_path = importer.succeed(
+            f"curl --fail -s --cacert {ca} --cert {cert} --key {key} "
+            "https://cache/gcroots/published"
+        ).strip()
+        cache.succeed(f"ls /var/lib/nix-cache/{marker_path.split('/')[-1].split('-')[0]}.narinfo")
+
+    with subtest("kiss-cache-publish in local mode skips HTTP"):
+        cache.succeed(
+            "mkdir -p /tmp/publish-flake; "
+            f"echo {flake_nix} | base64 -d > /tmp/publish-flake/flake.nix"
+        )
+        cache.fail("kiss-cache-publish nonexistent")
+        cache.succeed("kiss-cache-publish local-published")
+        marker_path = cache.succeed("cat /var/lib/nix-cache/gcroots/local-published").strip()
+        cache.succeed(f"ls /var/lib/nix-cache/{marker_path.split('/')[-1].split('-')[0]}.narinfo")
 
     with subtest("pruner keeps closures registered via PUT marker"):
         cache.succeed("systemctl start kiss-cache.service")

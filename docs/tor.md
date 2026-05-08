@@ -54,7 +54,22 @@ services.kiss-cache-update-tor = {
 };
 ```
 
-Writers push by routing `nix copy` and the marker `PUT` through Tor's
-SOCKS proxy with `ALL_PROXY=socks5h://127.0.0.1:9050`, after
-configuring `services.tor.client.onionServices.<write-onion>.clientAuthorizations`.
+Builder, paired with `kiss-cache-publish`:
+
+```nix
+services.kiss-cache-publish = {
+  enable = true;
+  systems = [ ... ];
+};
+services.kiss-cache-publish-tor = {
+  enable = true;
+  onion = "<contents of kiss-cache-write/hostname>";
+  # File containing this writer's *private* key.
+  clientAuthFile = "/run/keys/onion-auth";
+};
+```
+
+For manual `nix copy` and `curl` over Tor, set
+`ALL_PROXY=socks5h://127.0.0.1:9050` after configuring
+`services.tor.client.onionServices.<write-onion>.clientAuthorizations`.
 

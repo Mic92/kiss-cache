@@ -36,8 +36,10 @@
         kiss-cache = ./nixos/kiss-cache.nix;
         kiss-cache-serve = ./nixos/kiss-cache-serve.nix;
         kiss-cache-update = ./nixos/kiss-cache-update.nix;
+        kiss-cache-publish = ./nixos/kiss-cache-publish.nix;
         kiss-cache-serve-tor = ./nixos/kiss-cache-serve-tor.nix;
         kiss-cache-update-tor = ./nixos/kiss-cache-update-tor.nix;
+        kiss-cache-publish-tor = ./nixos/kiss-cache-publish-tor.nix;
         default = ./nixos/default.nix;
       };
 
