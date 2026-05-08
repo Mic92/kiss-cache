@@ -36,6 +36,8 @@
         kiss-cache = ./nixos/kiss-cache.nix;
         kiss-cache-serve = ./nixos/kiss-cache-serve.nix;
         kiss-cache-update = ./nixos/kiss-cache-update.nix;
+        kiss-cache-serve-tor = ./nixos/kiss-cache-serve-tor.nix;
+        kiss-cache-update-tor = ./nixos/kiss-cache-update-tor.nix;
         default = ./nixos/default.nix;
       };
 
@@ -47,6 +49,9 @@
         # The VM test only runs on Linux.
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           nixos = pkgs.callPackage ./nixos/test.nix {
+            nixosModule = self.nixosModules.default;
+          };
+          nixos-tor = pkgs.callPackage ./nixos/test-tor.nix {
             nixosModule = self.nixosModules.default;
           };
         }
