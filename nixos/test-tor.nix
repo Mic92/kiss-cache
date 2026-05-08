@@ -32,16 +32,18 @@ testers.runNixOSTest {
     { pkgs, ... }:
     {
       imports = [ nixosModule ];
-      # Format: descriptor:x25519:<base32 private key>. Tor only
-      # checks shape at startup; this dummy key never has to match a
-      # real onion since the test cannot reach the directory
-      # authorities anyway.
+      # Tor parses ClientOnionAuthDir at startup and rejects malformed
+      # entries: the onion must be a structurally valid v3 address
+      # (56-char base32 with checksum and version), and the key must
+      # base32-decode to 32 bytes. These dummies never connect anywhere
+      # — the test has no directory authorities — but they must parse.
       services = {
         kiss-cache-update.enable = true;
         kiss-cache-update-tor = {
           enable = true;
-          onion = "readreadreadreadreadreadreadreadreadreadreadreadreadread.onion";
-          clientAuthFile = pkgs.writeText "onion-auth-read" "descriptor:x25519:RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR";
+          # ed25519 pubkey 0x00*32 + checksum + version 3.
+          onion = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaam2dqd.onion";
+          clientAuthFile = pkgs.writeText "onion-auth-read" "descriptor:x25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         };
         kiss-cache-publish = {
           enable = true;
@@ -54,8 +56,9 @@ testers.runNixOSTest {
         };
         kiss-cache-publish-tor = {
           enable = true;
-          onion = "writewritewritewritewritewritewritewritewritewritewrite.onion";
-          clientAuthFile = pkgs.writeText "onion-auth-write" "descriptor:x25519:WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW";
+          # ed25519 pubkey 0x01*32 + checksum + version 3.
+          onion = "aeaqcaibaeaqcaibaeaqcaibaeaqcaibaeaqcaibaeaqcaibaea37ead.onion";
+          clientAuthFile = pkgs.writeText "onion-auth-write" "descriptor:x25519:AEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQ";
         };
       };
       systemd.timers = {
@@ -65,6 +68,8 @@ testers.runNixOSTest {
     };
 
   testScript = ''
+    read_onion = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaam2dqd"
+    write_onion = "aeaqcaibaeaqcaibaeaqcaibaeaqcaibaeaqcaibaeaqcaibaea37ead"
     start_all()
     cache.wait_for_unit("nginx.service")
     cache.wait_for_unit("tor.service")
@@ -123,12 +128,12 @@ testers.runNixOSTest {
             "cat $(systemctl show tor.service -p ExecStartPre "
             "| grep -oP 'argv\\[\\]=\\K\\S*ExecStartPre\\S*')"
         )
-        assert "readreadread" in pre and "writewritewrite" in pre, pre
+        assert read_onion in pre and write_onion in pre, pre
 
     with subtest("kiss-cache-update and -publish point at the onions via SOCKS"):
         for unit, onion in [
-            ("kiss-cache-update", "readreadread"),
-            ("kiss-cache-publish", "writewritewrite"),
+            ("kiss-cache-update", read_onion),
+            ("kiss-cache-publish", write_onion),
         ]:
             env = target.succeed(f"systemctl show {unit}.service -p Environment")
             assert "socks5h://127.0.0.1:9050" in env, env
