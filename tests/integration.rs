@@ -151,6 +151,19 @@ fn gcroot_in_nested_dir_is_followed() {
     assert!(!fx.narinfo_exists(HASH_GARBAGE));
 }
 
+/// A gcroot symlink pointing at a store path that is too short to contain
+/// a hash (e.g. /nix/store itself). Such garbage roots should be skipped,
+/// not crash the whole run.
+#[test]
+fn short_store_path_root_is_skipped() {
+    let fx = standard_fixture();
+    symlink("/nix/store", fx.gcroots.join("bogus-root")).unwrap();
+
+    fx.run(false);
+    assert!(fx.narinfo_exists(HASH_ROOT));
+    assert!(!fx.narinfo_exists(HASH_GARBAGE));
+}
+
 /// A gcroot directory containing a *relative* symlink to another directory,
 /// which in turn holds the actual store-path symlink. Nix produces such
 /// chains (e.g. profiles/system -> system-1-link). The relative target must

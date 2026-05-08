@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufRead, BufReader, Error as IoError},
+    io::{BufRead, BufReader, Error as IoError, ErrorKind},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -20,16 +20,21 @@ impl BinaryCache {
     }
 
     pub fn get_info_by_store_path(&mut self, path: &Path) -> Result<Info, IoError> {
-        if path.starts_with("/nix/store") {
-            let path = path.to_str().unwrap();
-            if path.len() >= 43 {
-                self.get_info_by_hash(&path["/nix/store/".len()..43])
-            } else {
-                panic!("Invalid store path: {path}");
-            }
-        } else {
-            panic!("Invalid store path: {}", path.display());
-        }
+        // Extract the 32-char base32 hash from /nix/store/<hash>-<name>.
+        let hash = path
+            .strip_prefix("/nix/store")
+            .ok()
+            .and_then(|rest| rest.to_str())
+            .filter(|rest| rest.len() >= 32)
+            .map(|rest| &rest[..32])
+            .filter(|hash| hash.bytes().all(|b| b.is_ascii_alphanumeric()));
+        let Some(hash) = hash else {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                format!("not a store path: {}", path.display()),
+            ));
+        };
+        self.get_info_by_hash(hash)
     }
 
     pub fn get_info_by_hash(&mut self, hash: &str) -> Result<Info, IoError> {
