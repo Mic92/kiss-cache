@@ -102,3 +102,98 @@ $ curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
 
 Without the marker, the pushed closure is deleted on the next prune
 unless it is reachable from one of the cache server's local GC roots.
+
+## Setting up mutual TLS
+
+Mutual TLS (mTLS) means both sides authenticate with a certificate: the
+server proves who it is (as in ordinary HTTPS), and the client proves
+who *it* is by presenting a certificate signed by a CA the server
+trusts. There are no shared passwords or tokens to leak — possession of
+a private key is the credential, and revocation is removing the cert
+from the CA's trust (or letting it expire).
+
+This section sets up a private CA, a server certificate, and per-host
+client certificates. All commands use `openssl`.
+
+### 1. Create the CA
+
+The CA signs every other certificate. Its private key is the root of
+trust — keep it offline or at least off the cache server.
+
+```console
+$ openssl req -x509 -newkey ed25519 -nodes -days 3650 \
+    -subj "/CN=My Nix Cache CA" \
+    -keyout ca.key -out ca.pem
+```
+
+Deploy `ca.pem` (the public half) to the cache server as `clientCA`.
+Never deploy `ca.key` anywhere except where you sign new certificates.
+
+### 2. Create the server certificate
+
+The server certificate is what reading clients verify against, so it
+needs a Subject Alternative Name matching the hostname they connect to.
+Use a publicly trusted certificate (e.g. via ACME / Let's Encrypt) if
+your clients are outside your control, or sign one with your private CA
+if you also distribute `ca.pem` to clients as their trust root:
+
+```console
+$ openssl req -newkey ed25519 -nodes \
+    -subj "/CN=cache.example.org" \
+    -addext "subjectAltName=DNS:cache.example.org" \
+    -keyout server.key -out server.csr
+$ openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key \
+    -days 365 -copy_extensions copy -out server.pem
+```
+
+Deploy `server.pem` and `server.key` to the cache server as
+`sslCertificate` / `sslCertificateKey`.
+
+### 3. Create client certificates
+
+Issue one certificate per host (or per role). The Common Name is what
+the server uses to decide who may write, so make it identifiable:
+
+```console
+$ openssl req -newkey ed25519 -nodes \
+    -subj "/CN=builder-01" \
+    -keyout builder-01.key -out builder-01.csr
+$ openssl x509 -req -in builder-01.csr -CA ca.pem -CAkey ca.key \
+    -days 365 -out builder-01.pem
+```
+
+Deploy `builder-01.pem` and `builder-01.key` to the builder host. Any
+certificate signed by the CA can read; only those whose distinguished
+name is listed in `services.kiss-cache-serve.writers` can push:
+
+```nix
+services.kiss-cache-serve.writers = [ "CN=builder-01" ];
+```
+
+### 4. Configure the client
+
+On a NixOS machine that should fetch from the cache:
+
+```nix
+nix.settings = {
+  substituters = [
+    "https://cache.example.org?tls-certificate=/run/secrets/cache-client.pem&tls-private-key=/run/secrets/cache-client.key"
+  ];
+  trusted-public-keys = [ "cache.example.org:..." ];
+  # Only needed if the server cert is signed by your private CA.
+  ssl-cert-file = "/run/secrets/cache-ca.pem";
+};
+```
+
+Use a secrets manager (sops-nix, agenix) to deploy the private key with
+`0600` permissions; do not commit it to your configuration repo.
+
+### Rotation and revocation
+
+Issue short-lived client certificates (`-days 90`) and reissue on a
+timer. nginx checks expiry on every handshake, so an expired cert is
+immediately rejected with no extra infrastructure. If you need to
+revoke a still-valid certificate, replace `ca.pem` with a new CA and
+reissue every client certificate, or add CRL support via
+`services.nginx.virtualHosts.<host>.extraConfig` with
+`ssl_crl /path/to/crl.pem`.
