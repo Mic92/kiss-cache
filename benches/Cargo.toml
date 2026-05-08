@@ -1,0 +1,24 @@
+# Separate workspace member so criterion and its dependency tree never
+# enter the kiss-cache build closure. CI builds only the kiss-cache
+# package; benchmarks are run interactively with `cargo bench -p benches`.
+[package]
+name = "benches"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kiss-cache = { path = ".." }
+indicatif = { version = "0.18", default-features = false }
+tempfile = "3"
+# Default features pull in rayon and the plotters HTML report backend,
+# neither of which is used: benchmarks are read from the terminal.
+criterion = { version = "0.7", default-features = false, features = [ "cargo_bench_support" ] }
+
+[[bench]]
+name = "narinfo"
+harness = false
+
+[lints.clippy]
+unwrap_used = "allow"
+expect_used = "allow"

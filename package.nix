@@ -9,15 +9,12 @@ rustPlatform.buildRustPackage {
   src = lib.cleanSource ./.;
   cargoLock.lockFile = ./Cargo.lock;
   nativeCheckInputs = [ clippy ];
-  # Benches are not built or linted in CI: criterion is only useful
-  # interactively, and building it doubles the dependency closure.
-  cargoTestFlags = [
-    "--lib"
-    "--bins"
-    "--tests"
-  ];
+  # Build only the kiss-cache package: the benches workspace member pulls
+  # in criterion, which is only useful interactively.
+  cargoBuildFlags = [ "-p" "kiss-cache" ];
+  cargoTestFlags = [ "-p" "kiss-cache" ];
   postCheck = ''
-    cargo clippy --lib --bins --tests -- \
+    cargo clippy -p kiss-cache --all-targets -- \
       -D clippy::pedantic \
       -D warnings \
       -A clippy::module-name-repetitions \

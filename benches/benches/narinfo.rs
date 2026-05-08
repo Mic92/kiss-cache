@@ -1,7 +1,4 @@
-// Benchmarks may unwrap; a panic during setup is the clearest failure mode.
-#![allow(clippy::unwrap_used)]
-
-use std::{fmt::Write as _, fs, hint::black_box, os::unix::fs::symlink};
+use std::{fmt::Write as _, fs, hint::black_box};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use indicatif::ProgressBar;
@@ -94,9 +91,9 @@ fn e2e_fixture(tmp: &std::path::Path, n: u32, garbage: u32) -> Config {
     let gcroots_dir = tmp.join("gcroots");
     build_cache(&cache_dir, n, garbage);
     fs::create_dir_all(&gcroots_dir).unwrap();
-    symlink(
-        format!("/nix/store/{}-pkg", fake_hash(0)),
+    fs::write(
         gcroots_dir.join("root"),
+        format!("/nix/store/{}-pkg\n", fake_hash(0)),
     )
     .unwrap();
     Config {

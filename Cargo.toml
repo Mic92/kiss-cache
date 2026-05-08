@@ -1,3 +1,6 @@
+[workspace]
+members = [ ".", "benches" ]
+
 [package]
 name = "kiss-cache"
 description = "Trim Nix binary caches according to GC roots"
@@ -18,14 +21,7 @@ rustc-hash = "2"
 indicatif = { version = "0.18", default-features = false, features = [ "unicode-width" ] }
 
 [dev-dependencies]
-# Default features pull in rayon and the plotters HTML report backend,
-# neither of which is used: benchmarks are read from the terminal.
-criterion = { version = "0.7", default-features = false, features = [ "cargo_bench_support" ] }
 tempfile = "3"
-
-[[bench]]
-name = "narinfo"
-harness = false
 
 [lints.clippy]
 # This tool deletes files; it must never crash on bad input or filesystem
