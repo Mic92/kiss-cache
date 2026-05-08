@@ -86,7 +86,7 @@ together:
             sslCertificate = "/etc/ssl/cache.pem";
             sslCertificateKey = "/etc/ssl/cache.key";
             clientCA = "/etc/ssl/clients-ca.pem";
-            writers = [ "CN=hydra" ];
+            writers = [ "CN=builder-01" ];
           };
           services.kiss-cache = {
             enable = true;
