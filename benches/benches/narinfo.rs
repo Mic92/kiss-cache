@@ -1,11 +1,11 @@
 use std::{fmt::Write as _, fs, hint::black_box};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use indicatif::ProgressBar;
 use kiss_cache::{
     binary_cache::BinaryCache,
     closure_cache,
     dep_scan::DependencyScanner,
+    progress::Phase,
     prune::{self, Config, Progress},
     store_hash::StoreHash,
 };
@@ -66,7 +66,7 @@ fn bench_dep_scan(c: &mut Criterion) {
     const N: u32 = 2000;
     let tmp = tempfile::tempdir().unwrap();
     build_cache(tmp.path(), N, 0);
-    let progress = ProgressBar::hidden();
+    let progress = Phase::hidden();
     let root = StoreHash::from_name(&format!("{}-pkg", fake_hash(0))).unwrap();
 
     let mut group = c.benchmark_group("dep_scan");
@@ -136,11 +136,7 @@ fn bench_e2e_dry_run(c: &mut Criterion) {
         let cache = BinaryCache::new(&warm_config.cache_dir);
         let mut scanner = DependencyScanner::new();
         scanner.enqueue(StoreHash::from_name(&format!("{}-pkg", fake_hash(0))).unwrap());
-        let infos = scanner.scan(
-            &cache,
-            &closure_cache::Map::default(),
-            &ProgressBar::hidden(),
-        );
+        let infos = scanner.scan(&cache, &closure_cache::Map::default(), &Phase::hidden());
         closure_cache::save(
             &closure_cache::default_path(&warm_config.cache_dir),
             infos.iter().map(|(h, i)| (*h, i)),

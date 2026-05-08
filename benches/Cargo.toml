@@ -9,7 +9,6 @@ publish = false
 
 [dependencies]
 kiss-cache = { path = ".." }
-indicatif = { version = "0.18", default-features = false }
 tempfile = "3"
 # Default features pull in rayon and the plotters HTML report backend,
 # neither of which is used: benchmarks are read from the terminal.

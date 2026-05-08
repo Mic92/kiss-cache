@@ -4,11 +4,11 @@ use std::{
     thread::{self, available_parallelism},
 };
 
-use indicatif::ProgressBar;
 use rustc_hash::FxHashSet;
 
 use crate::binary_cache::{BinaryCache, NarInfo};
 use crate::closure_cache;
+use crate::progress::Phase;
 use crate::store_hash::StoreHash;
 
 pub struct DependencyScanner {
@@ -52,7 +52,7 @@ impl DependencyScanner {
         mut self,
         cache: &BinaryCache,
         closures: &closure_cache::Map,
-        progress: &ProgressBar,
+        progress: &Phase,
     ) -> Vec<(StoreHash, NarInfo)> {
         let workers = available_parallelism().map_or(1, std::num::NonZero::get);
         // seen already holds all initially-enqueued hashes; the closure can

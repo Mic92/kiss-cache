@@ -1,4 +1,3 @@
-use indicatif::ProgressBar;
 use rustc_hash::FxHashSet;
 use std::{
     collections::VecDeque,
@@ -6,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::store_hash::StoreHash;
+use crate::{progress::Phase, store_hash::StoreHash};
 
 /// Collects store hashes from a tree of marker files.
 ///
@@ -46,7 +45,7 @@ impl GcRoots {
     }
 
     #[must_use]
-    pub fn scan(mut self, progress: &ProgressBar) -> FxHashSet<StoreHash> {
+    pub fn scan(mut self, progress: &Phase) -> FxHashSet<StoreHash> {
         while let Some(path) = self.queue.pop_front() {
             self.seen += 1;
             progress.set_position(self.seen as u64);

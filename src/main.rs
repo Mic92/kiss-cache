@@ -1,6 +1,5 @@
 use std::{path::PathBuf, process::ExitCode};
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use kiss_cache::prune::{self, Config, Progress};
 
 const USAGE: &str = "\
@@ -55,36 +54,6 @@ fn parse_args() -> Result<Config, lexopt::Error> {
     })
 }
 
-fn make_progress(dry_run: bool) -> Progress {
-    let make_spinner = |color| {
-        let template = format!(
-            "{{spinner}} {{prefix:.bold.dim}} {{wide_bar:.{color}}} [{{pos:.bold.dim}}/{{len:.bold}}] {{msg}}"
-        );
-        // The template is a fixed literal; only the colour varies, and all
-        // colours we pass are valid. Fall back to the default style rather
-        // than crash if indicatif ever rejects one.
-        ProgressStyle::with_template(&template)
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
-    };
-    let multi = MultiProgress::new();
-    let bar = |prefix: String, color, length| {
-        let bar = multi.add(ProgressBar::new(length));
-        bar.set_prefix(prefix);
-        bar.set_style(make_spinner(color));
-        bar.tick();
-        bar
-    };
-    let msg_prefix = if dry_run { "NOT " } else { "" };
-    Progress {
-        gcroots: bar("Scanning GCROOTS".into(), "green.dim", 0),
-        scanner: bar("Scanning dependencies".into(), "green", 1),
-        keep: bar("Retaining archives".into(), "yellow", 1),
-        rm_narinfo: bar(format!("{msg_prefix}Deleting .narinfo files"), "red", 1),
-        rm_nar: bar(format!("{msg_prefix}Deleting .nar files"), "red.dim", 1),
-    }
-}
-
 fn main() -> ExitCode {
     let config = match parse_args() {
         Ok(config) => config,
@@ -93,7 +62,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let progress = make_progress(config.dry_run);
+    let progress = Progress::new(config.dry_run);
     prune::run(&config, &progress);
     ExitCode::SUCCESS
 }

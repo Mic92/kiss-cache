@@ -17,8 +17,6 @@ repository = "https://github.com/Mic92/kiss-cache.git"
 [dependencies]
 lexopt = "0.3"
 rustc-hash = "2"
-# Default features pull in wasmbind, irrelevant for a Linux CLI.
-indicatif = { version = "0.18", default-features = false, features = [ "unicode-width" ] }
 
 [dev-dependencies]
 tempfile = "3"

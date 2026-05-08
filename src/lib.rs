@@ -2,5 +2,6 @@ pub mod binary_cache;
 pub mod closure_cache;
 pub mod dep_scan;
 pub mod gcroots;
+pub mod progress;
 pub mod prune;
 pub mod store_hash;
