@@ -65,9 +65,15 @@ testers.runNixOSTest {
         # roots exist; the system's own /nix/var/nix/gcroots would pull in the
         # whole VM closure and make the assertions meaningless.
         "d /var/lib/nix-cache-roots 0755 root root -"
+        # A second binary cache served plain HTTP from the same nginx, used
+        # as the fallback upstream for the proxy_store test.
+        "d /var/lib/upstream-cache 0755 nginx nginx -"
       ];
 
       environment.etc."nix/secret-key".text = signingKey;
+
+      services.nginx.virtualHosts."upstream".root = "/var/lib/upstream-cache";
+      networking.hosts."127.0.0.1" = [ "upstream" ];
 
       services.kiss-cache-serve = {
         enable = true;
@@ -77,6 +83,7 @@ testers.runNixOSTest {
         sslCertificateKey = "${certs}/server.key";
         clientCA = "${certs}/ca.pem";
         writers = [ "CN=writer" ];
+        fallbackCache = "http://upstream";
       };
 
       services.kiss-cache = {
@@ -198,5 +205,24 @@ testers.runNixOSTest {
         # The pushed closure is reachable via the marker; still fetchable.
         importer.succeed(f"nix-store --delete {push} || true")
         importer.succeed(f"nix copy --no-check-sigs --from '{store}' {push}")
+
+    with subtest("miss falls back to the upstream cache and is stored"):
+        up = cache.succeed(
+            "nix build --impure --print-out-paths --expr "
+            "'derivation { name = \"hello-upstream\"; system = builtins.currentSystem; "
+            "builder = \"/bin/sh\"; args = [\"-c\" \"echo upstream > $out\"]; }'"
+        ).strip()
+        cache.succeed(
+            f"nix copy --to 'file:///var/lib/upstream-cache?secret-key=/etc/nix/secret-key' {up}"
+        )
+        cache.succeed("chown -R nginx:nginx /var/lib/upstream-cache")
+        up_hash = up.split("/")[-1].split("-")[0]
+        # Only on the plain-HTTP upstream vhost, not the mTLS cache.
+        cache.fail(f"test -e /var/lib/nix-cache/{up_hash}.narinfo")
+        # Importer fetches via the mTLS cache; nginx proxies the miss to the
+        # upstream vhost and stores the result.
+        importer.succeed(f"nix-store --delete {up} || true")
+        importer.succeed(f"nix copy --no-check-sigs --from '{store}' {up}")
+        cache.succeed(f"test -e /var/lib/nix-cache/{up_hash}.narinfo")
   '';
 }

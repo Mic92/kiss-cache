@@ -75,6 +75,23 @@ in
       '';
     };
 
+    fallbackCache = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "https://cache.nixos.org";
+      description = ''
+        Upstream binary cache to proxy on local miss. The fetched response
+        is also stored in `cacheDir`, so the next request for the same path
+        is served locally. Stored entries are not registered as GC roots and
+        are deleted on the next prune unless reachable from one; this is
+        intentional, as they can be refetched on the next miss.
+
+        Clients fetching through the proxy receive the upstream's signature
+        unmodified. Add the upstream's public key to `trusted-public-keys`
+        alongside this cache's own key.
+      '';
+    };
+
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -108,6 +125,13 @@ in
             expires max;
             add_header Cache-Control immutable;
           ''
+          + lib.optionalString (cfg.fallbackCache != null) ''
+            # On a 404 from the static handler, retry against the upstream.
+            # Unlike try_files, error_page only fires after the content phase
+            # has run, so a PUT for a not-yet-existing file is still created
+            # by dav_methods rather than forwarded to the upstream.
+            error_page 404 = @fallback;
+          ''
           + lib.optionalString (cfg.writers != [ ]) ''
             # WebDAV PUT for `nix copy --to https://...`. Reads are open to
             # any mTLS client; writes only to certificates in `writers`.
@@ -135,6 +159,25 @@ in
           default_type text/plain;
           return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n";
         '';
+        # On local miss, fetch from the upstream cache and store the result
+        # at the same path so the next request is a local hit. proxy_store is
+        # not subject to expiry, which matches the immutability of
+        # content-addressed cache entries; stale entries are reclaimed by the
+        # pruner like any other unreachable file.
+        locations."@fallback" = lib.mkIf (cfg.fallbackCache != null) {
+          extraConfig = ''
+            internal;
+            proxy_pass ${cfg.fallbackCache};
+            proxy_set_header Host ${builtins.head (builtins.match "https?://([^/]+).*" cfg.fallbackCache)};
+            proxy_ssl_server_name on;
+            proxy_store on;
+            proxy_store_access user:rw group:r all:r;
+            proxy_temp_path ${cfg.cacheDir}/.tmp;
+            # The upstream responds 404 for paths it does not have either.
+            # Do not store error pages.
+            proxy_intercept_errors off;
+          '';
+        };
         # Marker files registering remote gcroots (see `writers` doc). The
         # pruner reads this directory; nginx never serves its contents.
         locations."/gcroots/" = lib.mkIf (cfg.writers != [ ]) {
@@ -152,16 +195,20 @@ in
       };
     };
 
-    systemd.tmpfiles.rules = lib.mkIf (cfg.writers != [ ]) [
-      "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
-      "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} -"
-    ];
+    systemd.tmpfiles.rules = lib.mkIf (cfg.writers != [ ] || cfg.fallbackCache != null) (
+      [
+        "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
+      ]
+      ++ lib.optional (
+        cfg.writers != [ ]
+      ) "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} -"
+    );
 
-    # NixOS hardens nginx with ProtectSystem=strict; the WebDAV PUT path
-    # needs an explicit grant to write into the cache directory.
-    systemd.services.nginx.serviceConfig.ReadWritePaths = lib.mkIf (cfg.writers != [ ]) [
-      cfg.cacheDir
-    ];
+    # NixOS hardens nginx with ProtectSystem=strict; both WebDAV PUT and
+    # proxy_store need an explicit grant to write into the cache directory.
+    systemd.services.nginx.serviceConfig.ReadWritePaths = lib.mkIf (
+      cfg.writers != [ ] || cfg.fallbackCache != null
+    ) [ cfg.cacheDir ];
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ 443 ];
   };
