@@ -84,6 +84,7 @@ testers.runNixOSTest {
         clientCA = "${certs}/ca.pem";
         writers = [ "CN=writer" ];
         fallbackCache = "http://upstream";
+        gcRootMaxAge = "7d";
       };
 
       services.kiss-cache = {
@@ -224,5 +225,15 @@ testers.runNixOSTest {
         importer.succeed(f"nix-store --delete {up} || true")
         importer.succeed(f"nix copy --no-check-sigs --from '{store}' {up}")
         cache.succeed(f"test -e /var/lib/nix-cache/{up_hash}.narinfo")
+
+    with subtest("old gcroot markers are cleaned by tmpfiles"):
+        # Backdate the marker past gcRootMaxAge and run cleanup.
+        cache.succeed(f"touch -d '30 days ago' /var/lib/nix-cache/gcroots/{marker}")
+        cache.succeed("systemd-tmpfiles --clean")
+        cache.fail(f"test -e /var/lib/nix-cache/gcroots/{marker}")
+        # With the marker gone the closure is unreachable and gets pruned.
+        cache.succeed("systemctl start kiss-cache.service")
+        push_hash = push.split("/")[-1].split("-")[0]
+        cache.fail(f"test -e /var/lib/nix-cache/{push_hash}.narinfo")
   '';
 }

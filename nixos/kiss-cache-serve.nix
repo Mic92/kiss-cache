@@ -75,6 +75,22 @@ in
       '';
     };
 
+    gcRootMaxAge = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "30d";
+      description = ''
+        Delete gcroot marker files older than this age, in
+        `tmpfiles.d(5)` age format. The next prune then reclaims any
+        cache entries that were only reachable through expired markers.
+        Writers must re-`PUT` markers periodically (e.g. on every push)
+        to keep their closures alive.
+
+        Cleanup runs from `systemd-tmpfiles-clean.timer` (daily by
+        default). Set to `null` to keep markers forever.
+      '';
+    };
+
     fallbackCache = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -199,9 +215,15 @@ in
       [
         "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
       ]
-      ++ lib.optional (
-        cfg.writers != [ ]
-      ) "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} -"
+      ++ lib.optional (cfg.writers != [ ]) (
+        let
+          # Age by mtime only: writers refresh markers with PUT, which updates
+          # mtime. The default age-by also checks ctime, which a backup restore
+          # or rsync resets, accidentally extending a marker's lifetime.
+          age = if cfg.gcRootMaxAge == null then "-" else "m:${cfg.gcRootMaxAge}";
+        in
+        "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} ${age}"
+      )
     );
 
     # NixOS hardens nginx with ProtectSystem=strict; both WebDAV PUT and

@@ -128,6 +128,13 @@ $ curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
 Without the marker, the pushed closure is deleted on the next prune
 unless it is reachable from one of the cache server's local GC roots.
 
+Set `gcRootMaxAge` to expire stale markers automatically. Writers must
+re-`PUT` on each push to keep their closures alive:
+
+```nix
+services.kiss-cache-serve.gcRootMaxAge = "30d";
+```
+
 Set `fallbackCache` to chain through to an upstream cache: a local
 miss is fetched from there and stored, so the next request for the
 same path is a local hit.
