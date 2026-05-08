@@ -5,6 +5,7 @@ use std::{
 };
 
 use rustc_hash::FxHashSet;
+use std::ffi::OsStr;
 
 /// How often to rebuild progress-bar message strings. Indicatif redraws at
 /// most ~15 times a second; formatting more often than that is wasted work.
@@ -19,7 +20,6 @@ fn narinfo_name(hash: StoreHash) -> OsString {
 }
 
 use indicatif::{HumanBytes, ProgressBar};
-use walkdir::WalkDir;
 
 use crate::{binary_cache, closure_cache, dep_scan, gcroots, store_hash::StoreHash};
 
@@ -129,10 +129,8 @@ pub fn run(config: &Config, progress: &Progress) {
         HumanBytes(file_size)
     ));
 
-    let rm_narinfo_size = sweep(&cache_path, &progress.rm_narinfo, config.dry_run, |entry| {
-        let path = entry.path();
-        path.extension().is_some_and(|ext| ext == "narinfo")
-            && !keep_infos.contains(entry.file_name())
+    let rm_narinfo_size = sweep(&cache_path, &progress.rm_narinfo, config.dry_run, |name| {
+        name.as_encoded_bytes().ends_with(b".narinfo") && !keep_infos.contains(name)
     });
     drop(keep_infos);
     progress
@@ -143,7 +141,7 @@ pub fn run(config: &Config, progress: &Progress) {
         &cache_path.join("nar"),
         &progress.rm_nar,
         config.dry_run,
-        |entry| !keep_archives.contains(entry.file_name()),
+        |name| !keep_archives.contains(name),
     );
     drop(keep_archives);
     progress
@@ -151,17 +149,31 @@ pub fn run(config: &Config, progress: &Progress) {
         .finish_with_message(format!("{}", HumanBytes(rm_nar_size)));
 }
 
-/// Walk `dir` (depth 1) and delete every entry for which `should_delete`
-/// returns true. Returns total size of matched files. Honors `dry_run`.
+/// Walk `dir` (one level deep) and delete every entry for which
+/// `should_delete` returns true given its file name. Returns total size of
+/// matched files. Honors `dry_run`.
+///
+/// Uses `read_dir` directly rather than walkdir: the predicate only needs the
+/// basename, and walkdir materializes a full `PathBuf` for every entry it
+/// yields, which is most of its cost on a cache directory with millions of
+/// files. The full path is only built for the handful of entries we actually
+/// delete.
 fn sweep(
     dir: &Path,
     progress: &ProgressBar,
     dry_run: bool,
-    should_delete: impl Fn(&walkdir::DirEntry) -> bool,
+    should_delete: impl Fn(&OsStr) -> bool,
 ) -> u64 {
     let mut total = 0;
     progress.set_length(0);
-    for entry in WalkDir::new(dir).min_depth(1).max_depth(1) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Cannot read directory {}: {e}", dir.display());
+            return 0;
+        }
+    };
+    for entry in entries {
         // An entry can become unreadable mid-scan (concurrent deletion,
         // permissions); skip rather than abort the sweep.
         let entry = match entry {
@@ -171,14 +183,12 @@ fn sweep(
                 continue;
             }
         };
-        if !should_delete(&entry) {
+        if !should_delete(&entry.file_name()) {
             continue;
         }
         let path = entry.path();
         progress.inc_length(1);
 
-        // entry.metadata() reuses the stat WalkDir already did; do not
-        // round-trip through the kernel a second time per file.
         if let Ok(meta) = entry.metadata() {
             total += meta.len();
             if progress.position().is_multiple_of(MSG_INTERVAL) {
@@ -188,7 +198,7 @@ fn sweep(
             eprintln!("Cannot stat {}", path.display());
         }
 
-        if !dry_run && let Err(e) = fs::remove_file(path) {
+        if !dry_run && let Err(e) = fs::remove_file(&path) {
             eprintln!("Cannot remove {}: {}", path.display(), e);
         }
 
