@@ -19,6 +19,10 @@ impl BinaryCache {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` if `path` is not a `/nix/store/<hash>-<name>`
+    /// path, or any I/O error from reading the corresponding `.narinfo`.
     pub fn get_info_by_store_path(&mut self, path: &Path) -> Result<Info, IoError> {
         // Extract the 32-char base32 hash from /nix/store/<hash>-<name>.
         let hash = path
@@ -37,6 +41,9 @@ impl BinaryCache {
         self.get_info_by_hash(hash)
     }
 
+    /// # Errors
+    ///
+    /// Returns any I/O error from opening or reading `<hash>.narinfo`.
     pub fn get_info_by_hash(&mut self, hash: &str) -> Result<Info, IoError> {
         let path = self.path.join(format!("{hash}.narinfo"));
         if let Some(info) = self.cached_infos.get(&path) {
@@ -58,6 +65,9 @@ pub struct Info {
 }
 
 impl Info {
+    /// # Errors
+    ///
+    /// Returns any I/O error from opening or reading the file.
     pub fn open(path: &Path) -> Result<Self, IoError> {
         let f = File::open(path)?;
         let r = BufReader::new(f);
@@ -78,6 +88,7 @@ impl Info {
         })
     }
 
+    #[must_use]
     pub fn deriver(&self) -> Option<&str> {
         let deriver = self.fields.get("Deriver").map_or("", |s| s.as_str());
         if deriver.is_empty() {

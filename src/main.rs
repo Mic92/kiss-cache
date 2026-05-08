@@ -3,9 +3,7 @@ use std::{collections::HashSet, fs, path::Path, process::ExitCode};
 use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
-mod binary_cache;
-mod dep_scan;
-mod gcroots;
+use nix_cache_cut::{binary_cache, dep_scan, gcroots};
 
 const USAGE: &str = "\
 Trim Nix binary caches according to GC roots

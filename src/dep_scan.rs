@@ -19,6 +19,7 @@ impl Default for DependencyScanner {
 }
 
 impl DependencyScanner {
+    #[must_use]
     pub fn new() -> Self {
         DependencyScanner {
             queue: VecDeque::with_capacity(1),

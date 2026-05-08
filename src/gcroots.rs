@@ -19,6 +19,7 @@ impl Default for GcRoots {
 }
 
 impl GcRoots {
+    #[must_use]
     pub fn new() -> Self {
         GcRoots {
             queue: VecDeque::with_capacity(1),
@@ -44,6 +45,7 @@ impl GcRoots {
         }
     }
 
+    #[must_use]
     pub fn scan(mut self, progress: &ProgressBar) -> HashSet<PathBuf> {
         while let Some(path) = self.queue.pop_front() {
             progress.set_position((self.seen.len() - self.queue.len()) as u64);
