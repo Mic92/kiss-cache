@@ -6,13 +6,30 @@
 rustPlatform.buildRustPackage {
   pname = "kiss-cache";
   version = (lib.importTOML ./Cargo.toml).package.version;
-  src = lib.cleanSource ./.;
+  # Only the Rust sources affect the binary; pruning README/nixos/etc.
+  # means doc and test changes do not invalidate the build cache.
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./Cargo.toml
+      ./Cargo.lock
+      ./src
+      ./tests
+      ./benches
+    ];
+  };
   cargoLock.lockFile = ./Cargo.lock;
   nativeCheckInputs = [ clippy ];
   # Build only the kiss-cache package: the benches workspace member pulls
   # in criterion, which is only useful interactively.
-  cargoBuildFlags = [ "-p" "kiss-cache" ];
-  cargoTestFlags = [ "-p" "kiss-cache" ];
+  cargoBuildFlags = [
+    "-p"
+    "kiss-cache"
+  ];
+  cargoTestFlags = [
+    "-p"
+    "kiss-cache"
+  ];
   postCheck = ''
     cargo clippy -p kiss-cache --all-targets -- \
       -D clippy::pedantic \
