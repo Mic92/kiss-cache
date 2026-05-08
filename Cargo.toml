@@ -10,6 +10,7 @@ repository = "https://github.com/astro/nix-cache-cut.git"
 
 [dependencies]
 lexopt = "0.3"
+rustc-hash = "2"
 walkdir = "2"
 indicatif = "0.18"
 

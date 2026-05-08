@@ -1,13 +1,14 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use indicatif::ProgressBar;
+use rustc_hash::FxHashSet;
 
 use crate::binary_cache::{BinaryCache, Info};
 use crate::store_hash::StoreHash;
 
 pub struct DependencyScanner {
     queue: VecDeque<StoreHash>,
-    seen: HashSet<StoreHash>,
+    seen: FxHashSet<StoreHash>,
 }
 
 impl Default for DependencyScanner {
@@ -21,7 +22,7 @@ impl DependencyScanner {
     pub fn new() -> Self {
         DependencyScanner {
             queue: VecDeque::with_capacity(1),
-            seen: HashSet::new(),
+            seen: FxHashSet::default(),
         }
     }
 

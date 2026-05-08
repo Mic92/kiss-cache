@@ -1,17 +1,14 @@
 use indicatif::ProgressBar;
-use std::{
-    collections::{HashSet, VecDeque},
-    fs,
-    path::PathBuf,
-};
+use rustc_hash::FxHashSet;
+use std::{collections::VecDeque, fs, path::PathBuf};
 use walkdir::WalkDir;
 
 use crate::store_hash::StoreHash;
 
 pub struct GcRoots {
     queue: VecDeque<PathBuf>,
-    seen: HashSet<PathBuf>,
-    store_hashes: HashSet<StoreHash>,
+    seen: FxHashSet<PathBuf>,
+    store_hashes: FxHashSet<StoreHash>,
 }
 
 impl Default for GcRoots {
@@ -25,8 +22,8 @@ impl GcRoots {
     pub fn new() -> Self {
         GcRoots {
             queue: VecDeque::with_capacity(1),
-            seen: HashSet::new(),
-            store_hashes: HashSet::new(),
+            seen: FxHashSet::default(),
+            store_hashes: FxHashSet::default(),
         }
     }
 
@@ -43,7 +40,7 @@ impl GcRoots {
     }
 
     #[must_use]
-    pub fn scan(mut self, progress: &ProgressBar) -> HashSet<StoreHash> {
+    pub fn scan(mut self, progress: &ProgressBar) -> FxHashSet<StoreHash> {
         while let Some(path) = self.queue.pop_front() {
             progress.set_position((self.seen.len() - self.queue.len()) as u64);
             progress.set_length(self.seen.len() as u64);

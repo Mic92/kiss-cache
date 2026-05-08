@@ -1,9 +1,10 @@
 use std::{
-    collections::HashSet,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
 };
+
+use rustc_hash::FxHashSet;
 
 /// How often to rebuild progress-bar message strings. Indicatif redraws at
 /// most ~15 times a second; formatting more often than that is wasted work.
@@ -72,8 +73,10 @@ pub fn run(config: &Config, progress: &Progress) {
     // entry against a keep-set. Keying on the file name alone avoids
     // hashing the (identical) cache directory prefix on every membership
     // check, and avoids storing it thousands of times.
-    let mut keep_infos: HashSet<OsString> = HashSet::with_capacity(infos.len());
-    let mut keep_archives: HashSet<OsString> = HashSet::with_capacity(infos.len());
+    let mut keep_infos: FxHashSet<OsString> =
+        FxHashSet::with_capacity_and_hasher(infos.len(), rustc_hash::FxBuildHasher);
+    let mut keep_archives: FxHashSet<OsString> =
+        FxHashSet::with_capacity_and_hasher(infos.len(), rustc_hash::FxBuildHasher);
     let cache_path = cache.path.clone();
     for info in infos {
         progress.keep.inc(1);
