@@ -21,8 +21,15 @@
           src = lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
           nativeCheckInputs = [ pkgs.clippy ];
+          # Benches are not built or linted in CI: criterion is only useful
+          # interactively, and building it doubles the dependency closure.
+          cargoTestFlags = [
+            "--lib"
+            "--bins"
+            "--tests"
+          ];
           postCheck = ''
-            cargo clippy --all --all-features --tests -- \
+            cargo clippy --lib --bins --tests -- \
               -D clippy::pedantic \
               -D warnings \
               -A clippy::module-name-repetitions \

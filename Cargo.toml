@@ -14,10 +14,13 @@ repository = "https://github.com/Mic92/kiss-cache.git"
 [dependencies]
 lexopt = "0.3"
 rustc-hash = "2"
-indicatif = "0.18"
+# Default features pull in wasmbind, irrelevant for a Linux CLI.
+indicatif = { version = "0.18", default-features = false, features = [ "unicode-width" ] }
 
 [dev-dependencies]
-criterion = "0.7"
+# Default features pull in rayon and the plotters HTML report backend,
+# neither of which is used: benchmarks are read from the terminal.
+criterion = { version = "0.7", default-features = false, features = [ "cargo_bench_support" ] }
 tempfile = "3"
 
 [[bench]]
