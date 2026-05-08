@@ -20,7 +20,7 @@ impl BinaryCache {
     /// # Errors
     ///
     /// Returns any I/O error from opening or reading `<hash>.narinfo`.
-    pub fn get_info_by_hash(&mut self, hash: StoreHash) -> Result<Info, IoError> {
+    pub fn get_info_by_hash(&self, hash: StoreHash) -> Result<Info, IoError> {
         Info::open(&self.narinfo_path(hash))
     }
 

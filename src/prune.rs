@@ -57,12 +57,12 @@ pub fn run(config: &Config, progress: &Progress) {
     progress.gcroots.finish();
 
     // Scan gcroots dependencies
-    let mut cache = binary_cache::BinaryCache::new(&config.cache_dir);
+    let cache = binary_cache::BinaryCache::new(&config.cache_dir);
     let mut scanner = dep_scan::DependencyScanner::new();
     for hash in store_hashes {
         scanner.enqueue(hash);
     }
-    let infos = scanner.scan(&mut cache, &progress.scanner);
+    let infos = scanner.scan(&cache, &progress.scanner);
     progress.scanner.finish();
 
     // Statistics

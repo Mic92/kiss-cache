@@ -77,10 +77,10 @@ fn bench_dep_scan(c: &mut Criterion) {
     group.sample_size(500);
     group.bench_function("dep_scan_2000", |b| {
         b.iter(|| {
-            let mut cache = BinaryCache::new(tmp.path());
+            let cache = BinaryCache::new(tmp.path());
             let mut scanner = DependencyScanner::new();
             scanner.enqueue(root);
-            black_box(scanner.scan(&mut cache, &progress));
+            black_box(scanner.scan(&cache, &progress));
         });
     });
     group.finish();
