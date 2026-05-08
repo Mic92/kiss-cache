@@ -1,70 +1,65 @@
 {
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    utils.url = "github:numtide/flake-utils";
-    naersk = {
-      url = "github:nix-community/naersk/master";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
-  outputs = { self, nixpkgs, utils, naersk }:
+  outputs =
+    { self, nixpkgs }:
     let
       inherit (nixpkgs) lib;
-      pkgLambda = pkgs:
-        let
-          naersk-lib = pkgs.callPackage naersk { };
-        in
-        naersk-lib.buildPackage {
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      eachSystem = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+
+      mkPackage =
+        pkgs:
+        pkgs.rustPlatform.buildRustPackage {
           pname = "nix-cache-cut";
-          root = ./.;
-          checkInputs = [ pkgs.rustPackages.clippy ];
-          doCheck = true;
-          cargoTestCommands = x:
-            x ++ [
-              ''cargo clippy --all --all-features --tests -- \
-                -D clippy::pedantic \
-                -D warnings \
-                -A clippy::module-name-repetitions \
-                -A clippy::too-many-lines \
-                -A clippy::cast-possible-wrap \
-                -A clippy::cast-possible-truncation \
-                -A clippy::nonminimal_bool''
-            ];
-          meta.description = "Scan Nix files for dead code";
+          version = (lib.importTOML ./Cargo.toml).package.version;
+          src = lib.cleanSource ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeCheckInputs = [ pkgs.clippy ];
+          postCheck = ''
+            cargo clippy --all --all-features --tests -- \
+              -D clippy::pedantic \
+              -D warnings \
+              -A clippy::module-name-repetitions \
+              -A clippy::too-many-lines \
+              -A clippy::cast-possible-wrap \
+              -A clippy::cast-possible-truncation
+          '';
+          meta = {
+            description = "Trim Nix binary caches according to GC roots";
+            license = lib.licenses.mit;
+            mainProgram = "nix-cache-cut";
+          };
         };
     in
-    utils.lib.eachDefaultSystem
-      (system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in
-        {
-          packages = {
-            default = self.packages."${system}".nix-cache-cut;
-            nix-cache-cut = pkgLambda pkgs;
-          };
-
-          apps.default = utils.lib.mkApp {
-            drv = self.packages."${system}".default;
-          };
-
-          devShells.default = with pkgs; mkShell {
-            nativeBuildInputs = [ cargo rustc rustfmt rustPackages.clippy rust-analyzer ];
-            RUST_SRC_PATH = rustPlatform.rustLibSrc;
-          };
-        })
-    // {
-      overlays.default = (_: prev: {
-        nix-cache-cut = pkgLambda prev;
+    {
+      packages = eachSystem (pkgs: rec {
+        nix-cache-cut = mkPackage pkgs;
+        default = nix-cache-cut;
       });
 
-      hydraJobs.nix-cache-cut = builtins.foldl' (result: system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in result // {
-          ${system} = pkgs.lib.hydraJob (pkgLambda pkgs);
-        }
-      ) {} [ "x86_64-linux" "aarch64-linux" ];
+      devShells = eachSystem (pkgs: {
+        default = pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [
+            cargo
+            rustc
+            rustfmt
+            clippy
+            rust-analyzer
+          ];
+          RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
+        };
+      });
+
+      overlays.default = _: prev: { nix-cache-cut = mkPackage prev; };
+
+      hydraJobs.nix-cache-cut = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
+        system: lib.hydraJob self.packages.${system}.default
+      );
     };
 }
