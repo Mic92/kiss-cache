@@ -96,10 +96,14 @@ and `tls-private-key` store parameters:
 substituters = https://cache.example.org?tls-certificate=/etc/ssl/reader.pem&tls-private-key=/etc/ssl/reader.key
 ```
 
-Writers push and register a gcroot for the closure they pushed:
+Writers push and register a gcroot for the closure they pushed.
+Use `compression=zstd`: it decompresses an order of magnitude faster
+than the default xz, which in practice is the bottleneck when
+substituting from a fast local cache, and compresses well enough that
+the size difference is small.
 
 ```console
-$ store='https://cache.example.org?tls-certificate=writer.pem&tls-private-key=writer.key'
+$ store='https://cache.example.org?compression=zstd&tls-certificate=writer.pem&tls-private-key=writer.key'
 $ nix copy --to "$store" /nix/store/abc...-hello
 $ curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
     "https://cache.example.org/gcroots/$(basename /nix/store/abc...-hello)"
@@ -107,6 +111,16 @@ $ curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
 
 Without the marker, the pushed closure is deleted on the next prune
 unless it is reachable from one of the cache server's local GC roots.
+
+## Why nginx and a flat file layout?
+
+A Nix binary cache is an immutable, content-addressed key-value store.
+The simplest thing that can possibly serve one is a static file server,
+and [cache-shootout](https://github.com/Mic92/cache-shootout) found
+nginx serving a flat directory to be the fastest of the options
+benchmarked. kiss-cache is the missing pruning and access-control half
+of that setup: nginx serves and accepts pushes, kiss-cache cleans up,
+and neither needs a database, a daemon, or anything to crash.
 
 ## Setting up mutual TLS
 

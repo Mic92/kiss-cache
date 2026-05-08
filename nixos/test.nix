@@ -112,7 +112,7 @@ testers.runNixOSTest {
     store = f"https://cache?tls-certificate={cert}&tls-private-key={key}"
     wcert = "${certs}/writer.pem"
     wkey = "${certs}/writer.key"
-    wstore = f"https://cache?tls-certificate={wcert}&tls-private-key={wkey}"
+    wstore = f"https://cache?compression=zstd&tls-certificate={wcert}&tls-private-key={wkey}"
 
     with subtest("mTLS rejects clients without a certificate"):
         # 400 Bad Request (no required SSL certificate), not a TLS alert,
