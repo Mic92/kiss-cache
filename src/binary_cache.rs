@@ -11,6 +11,13 @@ impl BinaryCache {
         BinaryCache { path: path.into() }
     }
 
+    /// Cheap existence check for a `.narinfo` file. Used to validate
+    /// closure-cache hits without paying for a full open + read + parse.
+    #[must_use]
+    pub fn narinfo_exists(&self, hash: StoreHash) -> bool {
+        self.narinfo_path(hash).exists()
+    }
+
     /// # Errors
     ///
     /// Returns any I/O error from opening or reading `<hash>.narinfo`.

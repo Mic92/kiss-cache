@@ -41,11 +41,13 @@ impl DependencyScanner {
     /// metadata for every one whose narinfo exists in the cache (or is
     /// already in `closures`).
     ///
-    /// Hashes already present in `closures` are answered without touching
-    /// the filesystem; the rest are read by a worker pool, since the cost is
-    /// dominated by opening one `.narinfo` per hash and the kernel can serve
-    /// those reads concurrently. The coordinator owns the visited set, dedups,
-    /// and dispatches new hashes discovered in `References`/`Deriver`.
+    /// Hashes already present in `closures` are answered with a cheap `stat()`
+    /// instead of a full open + read + parse; the stat is needed so a narinfo
+    /// deleted out of band does not keep its archive alive forever via the
+    /// cache. The rest are read by a worker pool, since the cost is dominated
+    /// by reading one `.narinfo` per hash and the kernel can serve those reads
+    /// concurrently. The coordinator owns the visited set, dedups, and
+    /// dispatches new hashes discovered in `References`/`Deriver`.
     pub fn scan(
         mut self,
         cache: &BinaryCache,
@@ -67,12 +69,21 @@ impl DependencyScanner {
             let (done_tx, done_rx) = mpsc::sync_channel::<(StoreHash, Option<NarInfo>)>(high_water);
             let mut work_txs = Vec::with_capacity(workers);
             for _ in 0..workers {
-                let (work_tx, work_rx) = mpsc::sync_channel::<StoreHash>(4);
+                // bool: true if the hash was a closure-cache hit and the
+                // worker only needs to verify the narinfo still exists.
+                let (work_tx, work_rx) = mpsc::sync_channel::<(StoreHash, bool)>(4);
                 work_txs.push(work_tx);
                 let done_tx = done_tx.clone();
                 scope.spawn(move || {
-                    while let Ok(hash) = work_rx.recv() {
-                        let info = cache.get_info_by_hash(hash).ok();
+                    while let Ok((hash, cached)) = work_rx.recv() {
+                        let info = if cached {
+                            // The coordinator already has the parsed metadata;
+                            // all the worker needs to do is confirm the file
+                            // was not deleted out of band.
+                            cache.narinfo_exists(hash).then(NarInfo::default)
+                        } else {
+                            cache.get_info_by_hash(hash).ok()
+                        };
                         if done_tx.send((hash, info)).is_err() {
                             return;
                         }
@@ -87,14 +98,11 @@ impl DependencyScanner {
                 while in_flight < high_water
                     && let Some(hash) = self.queue.pop_front()
                 {
-                    if let Some(info) = closures.get(&hash) {
-                        for hash in info.references.iter().chain(&info.deriver) {
-                            self.enqueue(*hash);
-                        }
-                        found.push((hash, info.clone()));
-                        continue;
-                    }
-                    if work_txs[next_worker % workers].send(hash).is_err() {
+                    let cached = closures.contains_key(&hash);
+                    if work_txs[next_worker % workers]
+                        .send((hash, cached))
+                        .is_err()
+                    {
                         return;
                     }
                     next_worker += 1;
@@ -110,7 +118,13 @@ impl DependencyScanner {
                 in_flight -= 1;
                 progress.set_length(self.seen.len() as u64);
                 progress.set_position((self.seen.len() - self.queue.len() - in_flight) as u64);
-                let Some(info) = result else { continue };
+                if result.is_none() {
+                    continue;
+                }
+                // Workers return a placeholder NarInfo for confirmed cache
+                // hits; the real metadata is in `closures`.
+                let info = closures.get(&hash).cloned().or(result);
+                let Some(info) = info else { continue };
                 for hash in info.references.iter().chain(&info.deriver) {
                     self.enqueue(*hash);
                 }

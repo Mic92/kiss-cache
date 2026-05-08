@@ -185,6 +185,29 @@ fn malformed_narinfo_is_skipped() {
     assert!(!fx.narinfo_exists(HASH_GARBAGE), "garbage deleted");
 }
 
+/// A non-dry-run pass writes a persistent closure cache. If a reachable
+/// narinfo is then deleted out of band, the cached entry must not keep its
+/// archive alive forever: the next run should notice the file is gone and
+/// sweep the archive.
+#[test]
+fn closure_cache_does_not_resurrect_deleted_narinfo() {
+    let fx = standard_fixture();
+    // First pass: deletes garbage, writes the closure cache for ROOT/DEP/DRV.
+    fx.run(false);
+    assert!(fx.narinfo_exists(HASH_DEP));
+    assert!(fx.nar_exists(HASH_DEP));
+
+    // Delete DEP's narinfo out of band (e.g. cache repair, manual cleanup).
+    fs::remove_file(fx.cache.join(format!("{HASH_DEP}.narinfo"))).unwrap();
+
+    // Second pass: DEP's narinfo is gone, so its archive is orphaned and
+    // must be swept even though the closure cache remembers it.
+    fx.run(false);
+    assert!(!fx.nar_exists(HASH_DEP), "orphaned nar must be swept");
+    assert!(fx.narinfo_exists(HASH_ROOT));
+    assert!(fx.nar_exists(HASH_ROOT));
+}
+
 /// A gcroot directory containing a *relative* symlink to another directory,
 /// which in turn holds the actual store-path symlink. Nix produces such
 /// chains (e.g. profiles/system -> system-1-link). The relative target must
