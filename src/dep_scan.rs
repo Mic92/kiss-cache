@@ -1,4 +1,7 @@
-use std::{collections::{HashSet, VecDeque}, path::PathBuf};
+use std::{
+    collections::{HashSet, VecDeque},
+    path::PathBuf,
+};
 
 use indicatif::ProgressBar;
 
@@ -7,6 +10,12 @@ use crate::binary_cache::BinaryCache;
 pub struct DependencyScanner {
     queue: VecDeque<PathBuf>,
     seen: HashSet<PathBuf>,
+}
+
+impl Default for DependencyScanner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DependencyScanner {
@@ -18,9 +27,8 @@ impl DependencyScanner {
     }
 
     pub fn enqueue(&mut self, path: PathBuf) {
-        if ! self.seen.contains(&path) {
-            self.queue.push_back(path.clone());
-            self.seen.insert(path);
+        if self.seen.insert(path.clone()) {
+            self.queue.push_back(path);
         }
     }
 

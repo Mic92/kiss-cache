@@ -1,6 +1,8 @@
 use std::{
-    path::{PathBuf, Path},
-    io::{Error as IoError, BufReader, BufRead}, fs::File, collections::HashMap,
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader, Error as IoError},
+    path::{Path, PathBuf},
     rc::Rc,
 };
 
@@ -26,12 +28,12 @@ impl BinaryCache {
                 panic!("Invalid store path: {path}");
             }
         } else {
-            panic!("Invalid store path: {path:?}");
+            panic!("Invalid store path: {}", path.display());
         }
     }
 
     pub fn get_info_by_hash(&mut self, hash: &str) -> Result<Info, IoError> {
-        let path: PathBuf = format!("{}/{}.narinfo", self.path.display(), hash).into();
+        let path = self.path.join(format!("{hash}.narinfo"));
         if let Some(info) = self.cached_infos.get(&path) {
             // cache hit
             return Ok(info.clone());
@@ -72,8 +74,7 @@ impl Info {
     }
 
     pub fn deriver(&self) -> Option<&str> {
-        let deriver = self.fields.get("Deriver")
-            .map_or("", |s| s.as_str());
+        let deriver = self.fields.get("Deriver").map_or("", |s| s.as_str());
         if deriver.is_empty() {
             None
         } else {
@@ -82,9 +83,10 @@ impl Info {
     }
 
     pub fn references(&self) -> impl Iterator<Item = &str> {
-        self.fields.get("References")
+        self.fields
+            .get("References")
             .map_or("", |s| s.as_str())
             .split(' ')
-            .filter(|s| ! s.is_empty())
+            .filter(|s| !s.is_empty())
     }
 }

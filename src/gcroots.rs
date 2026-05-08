@@ -1,15 +1,21 @@
+use indicatif::ProgressBar;
 use std::{
     collections::{HashSet, VecDeque},
     fs,
     path::PathBuf,
 };
-use indicatif::ProgressBar;
 use walkdir::WalkDir;
 
 pub struct GcRoots {
     queue: VecDeque<PathBuf>,
     seen: HashSet<PathBuf>,
     store_paths: HashSet<PathBuf>,
+}
+
+impl Default for GcRoots {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GcRoots {
@@ -22,8 +28,7 @@ impl GcRoots {
     }
 
     fn add_store_path(&mut self, mut path: PathBuf) {
-        let components = path.components()
-            .count();
+        let components = path.components().count();
         for _ in 4..components {
             path.pop();
         }
@@ -34,9 +39,8 @@ impl GcRoots {
         let path = path.into();
         if path.starts_with("/nix/store") {
             self.add_store_path(path);
-        } else if ! self.seen.contains(&path) {
-            self.queue.push_back(path.clone());
-            self.seen.insert(path);
+        } else if self.seen.insert(path.clone()) {
+            self.queue.push_back(path);
         }
     }
 
@@ -45,13 +49,9 @@ impl GcRoots {
             progress.set_position((self.seen.len() - self.queue.len()) as u64);
             progress.set_length(self.seen.len() as u64);
 
-            for entry in WalkDir::new(path).follow_links(false)
-                .into_iter()
-                .flatten()
-            {
+            for entry in WalkDir::new(path).follow_links(false).into_iter().flatten() {
                 if entry.path_is_symlink() {
-                    let target = fs::read_link(entry.path())
-                        .expect("read_link");
+                    let target = fs::read_link(entry.path()).expect("read_link");
                     self.enqueue(target);
                 }
             }
