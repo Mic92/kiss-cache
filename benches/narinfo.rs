@@ -12,6 +12,13 @@ fn fake_hash(i: u32) -> String {
     format!("{i:0>32x}")
 }
 
+/// Distinct hash for the deriver. Real Nix store paths and their .drv files
+/// never share a hash; reusing one here would let two enqueued store paths
+/// resolve to the same narinfo file, which never happens in practice.
+fn fake_drv_hash(i: u32) -> String {
+    format!("d{i:0>31x}")
+}
+
 /// Build a synthetic cache: `n` narinfo files, each referencing a handful of
 /// later ones, forming a DAG roughly shaped like a real closure.
 fn build_cache(dir: &std::path::Path, n: u32) {
@@ -34,8 +41,9 @@ fn build_cache(dir: &std::path::Path, n: u32) {
              NarHash: sha256:0000000000000000000000000000000000000000000000000000\n\
              NarSize: 67890\n\
              References: {refs}\n\
-             Deriver: {hash}-pkg.drv\n\
-             Sig: cache.example.org-1:AAAA\n"
+             Deriver: {drv}-pkg.drv\n\
+             Sig: cache.example.org-1:AAAA\n",
+            drv = fake_drv_hash(i),
         );
         fs::write(dir.join(format!("{hash}.narinfo")), narinfo).unwrap();
     }
@@ -48,7 +56,11 @@ fn bench_dep_scan(c: &mut Criterion) {
     let progress = ProgressBar::hidden();
     let root = PathBuf::from(format!("/nix/store/{}-pkg", fake_hash(0)));
 
-    c.bench_function("dep_scan_2000", |b| {
+    let mut group = c.benchmark_group("dep_scan");
+    // Default 100 samples is too noisy on a shared CI box for the ~5% deltas
+    // we care about; trade longer wall-clock for tighter confidence intervals.
+    group.sample_size(500);
+    group.bench_function("dep_scan_2000", |b| {
         b.iter(|| {
             // BinaryCache holds an in-process narinfo cache, so re-create it
             // each iteration to measure cold parse + traversal, not HashMap hits.
@@ -58,6 +70,7 @@ fn bench_dep_scan(c: &mut Criterion) {
             black_box(scanner.scan(&mut cache, &progress));
         });
     });
+    group.finish();
 }
 
 criterion_group!(benches, bench_dep_scan);
