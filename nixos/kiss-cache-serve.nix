@@ -65,12 +65,14 @@ in
         nix copy --to 'https://cache.example.org?tls-certificate=writer.pem&tls-private-key=writer.key' /nix/store/...
         ```
 
-        To keep a pushed closure from being pruned, also `PUT` an empty
-        marker file to `gcroots/<hash>-<name>`:
+        To keep a pushed closure from being pruned, also `PUT` a marker
+        file to `gcroots/<name>` whose content is the store path(s) to
+        keep, one per line. The marker name is yours to choose (e.g. a
+        CI job ID):
 
         ```
-        curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
-          https://cache.example.org/gcroots/$(basename /nix/store/...)
+        echo /nix/store/... | curl --cert writer.pem --key writer.key \
+          -X PUT --data-binary @- https://cache.example.org/gcroots/my-job
         ```
       '';
     };

@@ -29,12 +29,11 @@ in
 
     gcRoots = lib.mkOption {
       type = lib.types.listOf lib.types.path;
-      default = [ "/nix/var/nix/gcroots" ];
       description = ''
-        Garbage collector root directories. Anything reachable from a symlink
-        under these paths (transitively, via References and Deriver) is kept.
-        Plain files whose name is `<hash>-<name>` are also treated as roots,
-        so writers pushing over HTTP can register roots with a marker file.
+        Garbage collector root directories. Each plain file under these
+        paths is a marker file containing one or more store paths, one
+        per line. Anything reachable from a marked path (transitively,
+        via References and Deriver) is kept.
       '';
     };
 

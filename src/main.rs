@@ -6,11 +6,11 @@ use kiss_cache::prune::{self, Config, Progress};
 const USAGE: &str = "\
 Trim Nix binary caches according to GC roots
 
-Usage: kiss-cache [-n|--dry-run] <CACHEDIR> [GCROOTS...]
+Usage: kiss-cache [-n|--dry-run] <CACHEDIR> <GCROOTS>...
 
 Arguments:
   CACHEDIR    Cache directory
-  GCROOTS     Garbage collector roots [default: /nix/var/nix/gcroots]
+  GCROOTS     Directories of marker files naming store paths to keep
 
 Options:
   -n, --dry-run  Do not actually delete files
@@ -43,9 +43,9 @@ fn parse_args() -> Result<Config, lexopt::Error> {
     let cache_dir = positional
         .next()
         .ok_or("missing required argument CACHEDIR")?;
-    let mut gcroots: Vec<PathBuf> = positional.collect();
+    let gcroots: Vec<PathBuf> = positional.collect();
     if gcroots.is_empty() {
-        gcroots.push("/nix/var/nix/gcroots".into());
+        return Err("missing required argument GCROOTS".into());
     }
 
     Ok(Config {

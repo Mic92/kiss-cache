@@ -29,11 +29,11 @@ HTTP-pushable GC roots.
 $ nix run github:Mic92/kiss-cache -- --help
 Trim Nix binary caches according to GC roots
 
-Usage: kiss-cache [-n|--dry-run] <CACHEDIR> [GCROOTS...]
+Usage: kiss-cache [-n|--dry-run] <CACHEDIR> <GCROOTS>...
 
 Arguments:
   CACHEDIR    Cache directory
-  GCROOTS     Garbage collector roots [default: /nix/var/nix/gcroots]
+  GCROOTS     Directories of marker files naming store paths to keep
 
 Options:
   -n, --dry-run  Do not actually delete files
@@ -43,18 +43,18 @@ Options:
 
 ## How it works
 
-1. Recursively follow symlinks under each `GCROOTS` directory until they
-   reach a `/nix/store/<hash>-<name>` path. Those are the roots.
+1. Read every plain file under each `GCROOTS` directory (recursively).
+   Each line that parses as a `/nix/store/<hash>-<name>` path is a root.
+   Symlinks are not followed.
 2. For each root, parse `<CACHEDIR>/<hash>.narinfo` and recurse into its
    `References:` and `Deriver:` fields. The transitive closure is the set
    of reachable hashes.
 3. Delete every `*.narinfo`, `*.ls` and `nar/*` file in `CACHEDIR` not
    reachable from any root.
 
-Plain files in a gcroots directory whose basename is `<hash>-<name>` are
-also treated as roots, so processes that cannot create symlinks (e.g.
-remote builders pushing via HTTP `PUT`) can register roots by uploading
-an empty marker file.
+Marker files can have any name (e.g. a CI job ID); only their content
+matters. Lines that do not parse as a store path are ignored, so
+unrelated files in a roots directory are harmless.
 
 A persistent metadata cache at `<CACHEDIR>/.kiss-cache.closures` skips
 re-parsing unchanged `.narinfo` files on repeated runs. It is safe to
@@ -121,12 +121,11 @@ local cache, and compresses nearly as well.
 ```console
 $ store='https://cache.example.org?compression=zstd&secret-key=/etc/nix/cache-key&tls-certificate=writer.pem&tls-private-key=writer.key'
 $ nix copy --to "$store" /nix/store/abc...-hello
-$ curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
-    "https://cache.example.org/gcroots/$(basename /nix/store/abc...-hello)"
+$ echo /nix/store/abc...-hello | curl --cert writer.pem --key writer.key \
+    -X PUT --data-binary @- "https://cache.example.org/gcroots/my-job"
 ```
 
-Without the marker, the pushed closure is deleted on the next prune
-unless it is reachable from one of the cache server's local GC roots.
+Without the marker, the pushed closure is deleted on the next prune.
 
 Set `gcRootMaxAge` to expire stale markers automatically. Writers must
 re-`PUT` on each push to keep their closures alive:

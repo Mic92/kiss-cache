@@ -4,7 +4,7 @@
 //! End-to-end test: build a fake binary cache and a gcroots tree on disk,
 //! run the compiled binary against them, and assert which files survive.
 
-use std::{fs, os::unix::fs::symlink, path::PathBuf, process::Command};
+use std::{fs, path::PathBuf, process::Command};
 
 /// 32-character base32 nix store hashes (must be exactly 32 chars so that
 /// `/nix/store/<hash>` is 43 bytes, matching the slicing in `binary_cache.rs`).
@@ -64,11 +64,11 @@ impl Fixture {
         fs::write(self.cache.join(format!("{hash}.ls")), "{}").unwrap();
     }
 
-    /// Create a gcroot symlink pointing at /nix/store/<hash>-<name>.
-    fn add_gcroot(&self, link_name: &str, hash: &str, name: &str) {
-        symlink(
-            format!("/nix/store/{hash}-{name}"),
-            self.gcroots.join(link_name),
+    /// Create a gcroot marker file whose content is /nix/store/<hash>-<name>.
+    fn add_gcroot(&self, marker_name: &str, hash: &str, name: &str) {
+        fs::write(
+            self.gcroots.join(marker_name),
+            format!("/nix/store/{hash}-{name}\n"),
         )
         .unwrap();
     }
@@ -141,20 +141,24 @@ fn dry_run_deletes_nothing() {
     }
 }
 
-/// A gcroot can also be a plain file whose basename is `<hash>-<name>`.
-/// Remote builders pushing to the cache via HTTP cannot create symlinks,
-/// so they register roots by `PUT`ing an empty marker file to the gcroots
-/// directory. The pruner must treat that file like a symlink to
-/// `/nix/store/<basename>`.
+/// A marker file may list several store paths, one per line. Blank lines
+/// and lines that do not parse as a store path are ignored so unrelated
+/// files in the gcroots directory are harmless.
 #[test]
-fn gcroot_marker_file_is_a_root() {
+fn marker_file_with_multiple_lines() {
     let fx = Fixture::new();
     fx.add_narinfo(HASH_ROOT, "root", &[], None);
+    fx.add_narinfo(HASH_DEP, "dep", &[], None);
     fx.add_narinfo(HASH_GARBAGE, "garbage", &[], None);
-    fs::write(fx.gcroots.join(format!("{HASH_ROOT}-root")), "").unwrap();
+    fs::write(
+        fx.gcroots.join("ci-job-42"),
+        format!("/nix/store/{HASH_ROOT}-root\n\nnot a store path\n/nix/store/{HASH_DEP}-dep\n"),
+    )
+    .unwrap();
 
     fx.run(false);
     assert!(fx.narinfo_exists(HASH_ROOT));
+    assert!(fx.narinfo_exists(HASH_DEP));
     assert!(!fx.narinfo_exists(HASH_GARBAGE));
 }
 
@@ -166,9 +170,9 @@ fn gcroot_in_nested_dir_is_followed() {
     // gcroots are scanned recursively
     let nested = fx.gcroots.join("auto/per-user");
     fs::create_dir_all(&nested).unwrap();
-    symlink(
-        format!("/nix/store/{HASH_ROOT}-root"),
+    fs::write(
         nested.join("result"),
+        format!("/nix/store/{HASH_ROOT}-root\n"),
     )
     .unwrap();
 
@@ -177,13 +181,12 @@ fn gcroot_in_nested_dir_is_followed() {
     assert!(!fx.narinfo_exists(HASH_GARBAGE));
 }
 
-/// A gcroot symlink pointing at a store path that is too short to contain
-/// a hash (e.g. /nix/store itself). Such garbage roots should be skipped,
-/// not crash the whole run.
+/// A marker file naming a store path that is too short to contain a hash
+/// (e.g. /nix/store itself) is skipped, not a crash.
 #[test]
 fn short_store_path_root_is_skipped() {
     let fx = standard_fixture();
-    symlink("/nix/store", fx.gcroots.join("bogus-root")).unwrap();
+    fs::write(fx.gcroots.join("bogus-root"), "/nix/store\n").unwrap();
 
     fx.run(false);
     assert!(fx.narinfo_exists(HASH_ROOT));
@@ -231,34 +234,24 @@ fn closure_cache_does_not_resurrect_deleted_narinfo() {
     assert!(fx.nar_exists(HASH_ROOT));
 }
 
-/// A gcroot directory containing a *relative* symlink to another directory,
-/// which in turn holds the actual store-path symlink. Nix produces such
-/// chains (e.g. profiles/system -> system-1-link). The relative target must
-/// be resolved against the symlink's parent directory, not the process CWD;
-/// otherwise the real root is missed and its archives get deleted.
+/// Symlinks in the gcroots tree are not followed: the cache's gcroots
+/// directory is populated only by HTTP `PUT` of regular files. Following
+/// arbitrary symlinks would let a marker escape the gcroots tree.
 #[test]
-fn relative_symlink_in_gcroots_is_resolved() {
+fn symlink_in_gcroots_is_not_followed() {
+    use std::os::unix::fs::symlink;
     let fx = Fixture::new();
     fx.add_narinfo(HASH_ROOT, "root", &[], None);
-    fx.add_narinfo(HASH_GARBAGE, "garbage", &[], None);
 
-    // <tmp>/profiles/result -> /nix/store/<hash>-root
-    let profiles = fx.tmp.path().join("profiles");
-    fs::create_dir_all(&profiles).unwrap();
-    symlink(
-        format!("/nix/store/{HASH_ROOT}-root"),
-        profiles.join("result"),
-    )
-    .unwrap();
-    // <tmp>/gcroots/indirect -> ../profiles  (relative!)
-    symlink("../profiles", fx.gcroots.join("indirect")).unwrap();
+    let outside = fx.tmp.path().join("outside");
+    fs::write(&outside, format!("/nix/store/{HASH_ROOT}-root\n")).unwrap();
+    symlink(&outside, fx.gcroots.join("link")).unwrap();
 
     fx.run(false);
     assert!(
-        fx.narinfo_exists(HASH_ROOT),
-        "root reachable via relative symlink must be kept"
+        !fx.narinfo_exists(HASH_ROOT),
+        "symlinked marker must not be honoured"
     );
-    assert!(!fx.narinfo_exists(HASH_GARBAGE));
 }
 
 #[test]

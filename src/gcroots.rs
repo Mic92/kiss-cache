@@ -8,9 +8,20 @@ use std::{
 
 use crate::store_hash::StoreHash;
 
+/// Collects store hashes from a tree of marker files.
+///
+/// A marker file is a plain file whose content is one or more
+/// `/nix/store/<hash>-<name>` paths, one per line. The file name is not
+/// interpreted: writers pick whatever is convenient (e.g. a CI job ID).
+/// Lines that do not parse as a store path are ignored so unrelated files
+/// in a roots directory are harmless.
+///
+/// Directories are recursed into. Symlinks are not followed: the gcroots
+/// tree is populated only by HTTP `PUT` of regular files, and following
+/// symlinks would let a marker escape it.
 pub struct GcRoots {
     queue: VecDeque<PathBuf>,
-    seen: FxHashSet<PathBuf>,
+    seen: usize,
     store_hashes: FxHashSet<StoreHash>,
 }
 
@@ -24,78 +35,47 @@ impl GcRoots {
     #[must_use]
     pub fn new() -> Self {
         GcRoots {
-            queue: VecDeque::with_capacity(1),
-            seen: FxHashSet::default(),
+            queue: VecDeque::new(),
+            seen: 0,
             store_hashes: FxHashSet::default(),
         }
     }
 
     pub fn enqueue<P: Into<PathBuf>>(&mut self, path: P) {
-        let path = path.into();
-        if let Some(hash) = StoreHash::from_store_path(&path) {
-            self.store_hashes.insert(hash);
-        } else if !path.starts_with("/nix/store") && self.seen.insert(path.clone()) {
-            // Garbage roots that point at /nix/store but lack a hash (e.g.
-            // /nix/store itself) yield no StoreHash; ignore them rather than
-            // recursing into the store.
-            self.queue.push_back(path);
-        }
+        self.queue.push_back(path.into());
     }
 
-    /// Walk all enqueued roots, follow indirect roots (directories and
-    /// symlink chains), and return the set of store hashes they point at.
     #[must_use]
     pub fn scan(mut self, progress: &ProgressBar) -> FxHashSet<StoreHash> {
         while let Some(path) = self.queue.pop_front() {
-            progress.set_position((self.seen.len() - self.queue.len()) as u64);
-            progress.set_length(self.seen.len() as u64);
+            self.seen += 1;
+            progress.set_position(self.seen as u64);
+            progress.set_length((self.seen + self.queue.len()) as u64);
 
-            // The path can vanish or become unreadable between being
-            // enqueued and being visited; skip rather than abort.
+            // Entries can vanish between readdir and visit; skip rather
+            // than abort.
             let Ok(meta) = fs::symlink_metadata(&path) else {
                 continue;
             };
-            if meta.is_symlink() {
-                self.follow_symlink(&path);
-            } else if meta.is_dir() {
+            if meta.is_dir() {
                 self.recurse_into(&path);
-            } else {
-                self.try_marker_file(&path);
+            } else if meta.is_file() {
+                self.read_marker_file(&path);
             }
         }
 
         self.store_hashes
     }
 
-    fn follow_symlink(&mut self, path: &Path) {
-        let Ok(target) = fs::read_link(path) else {
-            eprintln!("Cannot read symlink {}", path.display());
+    fn read_marker_file(&mut self, path: &Path) {
+        let Ok(content) = fs::read_to_string(path) else {
+            eprintln!("Cannot read marker file {}", path.display());
             return;
         };
-        // Relative symlink targets are relative to the symlink's parent
-        // directory, not the process CWD. A root path may have no parent;
-        // fall back to enqueueing the relative target verbatim.
-        let target = match (target.is_absolute(), path.parent()) {
-            (false, Some(parent)) => parent.join(target),
-            _ => target,
-        };
-        self.enqueue(target);
-    }
-
-    /// A plain file whose basename is `<hash>-<name>` is treated as a root
-    /// for `/nix/store/<basename>`.
-    ///
-    /// Remote builders push to the cache via HTTP `PUT`, which cannot create
-    /// symlinks. They register roots by uploading an empty marker file named
-    /// after the store path. Files with non-store-path names (lock files,
-    /// `.gitignore`, etc.) are silently ignored.
-    fn try_marker_file(&mut self, path: &Path) {
-        if let Some(hash) = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(StoreHash::from_name)
-        {
-            self.store_hashes.insert(hash);
+        for line in content.lines() {
+            if let Some(hash) = StoreHash::from_store_path(Path::new(line.trim())) {
+                self.store_hashes.insert(hash);
+            }
         }
     }
 

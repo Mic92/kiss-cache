@@ -147,7 +147,7 @@ testers.runNixOSTest {
         )
         cache.succeed("chown -R nginx:nginx /var/lib/nix-cache")
         # Reachable from the pruner's gcroots dir so it survives.
-        cache.succeed(f"ln -sfn {drv} /var/lib/nix-cache-roots/keep")
+        cache.succeed(f"echo {drv} > /var/lib/nix-cache-roots/keep")
 
         importer.succeed(f"nix copy --no-check-sigs --from '{store}' {drv}")
         importer.succeed(f"test -e {drv}")
@@ -190,17 +190,17 @@ testers.runNixOSTest {
         cache.succeed(f"ls /var/lib/nix-cache/*.narinfo | xargs grep -l {push.split('/')[-1]}")
 
     with subtest("PUT gcroot marker keeps a pushed closure across pruning"):
-        marker = push.split("/")[-1]
+        marker = "ci-job-1"
         # Reader cannot register roots.
         importer.fail(
-            f"curl --fail -s --cacert {ca} --cert {cert} --key {key} "
-            f"-X PUT --data-binary @/dev/null https://cache/gcroots/{marker}"
+            f"echo {push} | curl --fail -s --cacert {ca} --cert {cert} --key {key} "
+            f"-X PUT --data-binary @- https://cache/gcroots/{marker}"
         )
         importer.succeed(
-            f"curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
-            f"-X PUT --data-binary @/dev/null https://cache/gcroots/{marker}"
+            f"echo {push} | curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            f"-X PUT --data-binary @- https://cache/gcroots/{marker}"
         )
-        cache.succeed(f"test -e /var/lib/nix-cache/gcroots/{marker}")
+        cache.succeed(f"grep -qx {push} /var/lib/nix-cache/gcroots/{marker}")
 
         cache.succeed("systemctl start kiss-cache.service")
         # The pushed closure is reachable via the marker; still fetchable.
