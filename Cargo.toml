@@ -14,7 +14,12 @@ walkdir = "2"
 indicatif = "0.18"
 
 [dev-dependencies]
+criterion = "0.7"
 tempfile = "3"
+
+[[bench]]
+name = "narinfo"
+harness = false
 
 [lints.clippy]
 # This tool deletes files; it must never crash on bad input or filesystem
