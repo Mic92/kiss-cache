@@ -56,15 +56,20 @@ impl DependencyScanner {
         // seen already holds all initially-enqueued hashes; the closure can
         // only grow from there. Reserving avoids repeated reallocation.
         let mut found = Vec::with_capacity(self.seen.len());
+        let high_water = workers * 4;
 
         thread::scope(|scope| {
-            // One channel per worker; the coordinator round-robins dispatches
-            // and never gives a worker more than two outstanding items, so a
-            // slow narinfo read cannot starve the rest of the pool.
-            let (done_tx, done_rx) = mpsc::channel::<(StoreHash, Option<NarInfo>)>();
+            // One bounded SPSC channel per worker; the coordinator round-robins
+            // dispatches and never gives a worker more than a few outstanding
+            // items, so a slow narinfo read cannot starve the rest of the
+            // pool. Bounded channels use array-based storage, avoiding the
+            // per-send heap allocation that the unbounded list channel does.
+            // Workers always have a small backlog so their receive rarely
+            // parks, which keeps sender futex wakes off the hot path.
+            let (done_tx, done_rx) = mpsc::sync_channel::<(StoreHash, Option<NarInfo>)>(high_water);
             let mut work_txs = Vec::with_capacity(workers);
             for _ in 0..workers {
-                let (work_tx, work_rx) = mpsc::channel::<StoreHash>();
+                let (work_tx, work_rx) = mpsc::sync_channel::<StoreHash>(4);
                 work_txs.push(work_tx);
                 let done_tx = done_tx.clone();
                 scope.spawn(move || {
@@ -80,7 +85,6 @@ impl DependencyScanner {
 
             let mut in_flight = 0usize;
             let mut next_worker = 0usize;
-            let high_water = workers * 2;
             loop {
                 while in_flight < high_water
                     && let Some(hash) = self.queue.pop_front()
