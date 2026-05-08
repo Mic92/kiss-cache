@@ -1,22 +1,16 @@
 use std::{
-    collections::HashMap,
     fs,
     io::{Error as IoError, ErrorKind},
     path::{Path, PathBuf},
-    rc::Rc,
 };
 
 pub struct BinaryCache {
     pub path: PathBuf,
-    cached_infos: HashMap<PathBuf, Info>,
 }
 
 impl BinaryCache {
     pub fn new<P: Into<PathBuf>>(path: P) -> Self {
-        BinaryCache {
-            path: path.into(),
-            cached_infos: HashMap::new(),
-        }
+        BinaryCache { path: path.into() }
     }
 
     /// # Errors
@@ -45,26 +39,17 @@ impl BinaryCache {
     ///
     /// Returns any I/O error from opening or reading `<hash>.narinfo`.
     pub fn get_info_by_hash(&mut self, hash: &str) -> Result<Info, IoError> {
-        let path = self.path.join(format!("{hash}.narinfo"));
-        if let Some(info) = self.cached_infos.get(&path) {
-            // cache hit
-            return Ok(info.clone());
-        }
-
-        // cache miss, read
-        let info = Info::open(&path)?;
-        self.cached_infos.insert(path, info.clone());
-        Ok(info)
+        Info::open(&self.path.join(format!("{hash}.narinfo")))
     }
 }
 
 /// The subset of narinfo fields the pruner actually needs.
 ///
-/// `Info` is held in two long-lived `HashSet`s sized to the closure of all
-/// GC roots, which on a busy server can be hundreds of thousands of entries.
-/// Storing only what we use, in shared owned strings rather than a per-file
+/// `Info` is held in a long-lived `Vec` sized to the closure of all GC roots,
+/// which on a busy server can be hundreds of thousands of entries. Storing
+/// only what we use, in compact owned strings rather than a per-file
 /// `HashMap<String, String>`, keeps that memory bounded.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 struct Fields {
     url: Option<Box<str>>,
     file_size: Option<u64>,
@@ -75,10 +60,10 @@ struct Fields {
     deriver: Option<Box<str>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Info {
     pub path: PathBuf,
-    fields: Rc<Fields>,
+    fields: Fields,
 }
 
 impl Info {
@@ -115,7 +100,7 @@ impl Info {
 
         Ok(Info {
             path: path.into(),
-            fields: Rc::new(fields),
+            fields,
         })
     }
 

@@ -124,25 +124,22 @@ fn run(args: &Args) {
     for path in store_paths {
         scanner.enqueue(path);
     }
-    let scanner_seen = scanner.scan(&mut cache, &progress_scanner);
+    let infos = scanner.scan(&mut cache, &progress_scanner);
     progress_scanner.finish();
 
     // Statistics
     let (mut file_size, mut nar_size) = (0u64, 0u64);
     // Set of files to keep
-    progress_keep.set_length(scanner_seen.len() as u64);
-    let mut keep_infos = HashSet::with_capacity(scanner_seen.len());
-    let mut keep_archives = HashSet::with_capacity(scanner_seen.len());
+    progress_keep.set_length(infos.len() as u64);
+    let mut keep_infos = HashSet::with_capacity(infos.len());
+    let mut keep_archives = HashSet::with_capacity(infos.len());
     let cache_path = cache.path.clone();
-    for path in scanner_seen {
-        let result = cache.get_info_by_store_path(&path).ok();
+    for info in infos {
         progress_keep.inc(1);
-        let Some(info) = result else { continue };
         // A truncated or hand-edited narinfo must not abort the run, but it
         // also must not be treated as fully accounted for: keep its .narinfo
         // (it is still reachable) but warn and skip statistics/archive
         // tracking for the missing fields.
-        keep_infos.insert(info.path.clone());
         if let Some(url) = info.url() {
             keep_archives.insert(cache_path.join(url));
         } else {
@@ -150,14 +147,13 @@ fn run(args: &Args) {
         }
         file_size += info.file_size();
         nar_size += info.nar_size();
+        keep_infos.insert(info.path);
         progress_keep.set_message(format!(
             "{} in {} archive files",
             HumanBytes(nar_size),
             HumanBytes(file_size)
         ));
     }
-    // free memory early
-    drop(cache);
     progress_keep.finish_with_message(format!(
         "{} in {} archive files",
         HumanBytes(nar_size),
