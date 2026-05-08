@@ -1,7 +1,7 @@
 // Benchmarks may unwrap; a panic during setup is the clearest failure mode.
 #![allow(clippy::unwrap_used)]
 
-use std::{fmt::Write as _, fs, hint::black_box, os::unix::fs::symlink, path::PathBuf};
+use std::{fmt::Write as _, fs, hint::black_box, os::unix::fs::symlink};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use indicatif::ProgressBar;
@@ -9,6 +9,7 @@ use nix_cache_cut::{
     binary_cache::BinaryCache,
     dep_scan::DependencyScanner,
     prune::{self, Config, Progress},
+    store_hash::StoreHash,
 };
 
 /// Fabricate a deterministic 32-char fake store hash from an index.
@@ -68,7 +69,7 @@ fn bench_dep_scan(c: &mut Criterion) {
     let tmp = tempfile::tempdir().unwrap();
     build_cache(tmp.path(), N, 0);
     let progress = ProgressBar::hidden();
-    let root = PathBuf::from(format!("/nix/store/{}-pkg", fake_hash(0)));
+    let root = StoreHash::from_name(&format!("{}-pkg", fake_hash(0))).unwrap();
 
     let mut group = c.benchmark_group("dep_scan");
     // Default 100 samples is too noisy on a shared CI box for the ~5% deltas
@@ -76,11 +77,9 @@ fn bench_dep_scan(c: &mut Criterion) {
     group.sample_size(500);
     group.bench_function("dep_scan_2000", |b| {
         b.iter(|| {
-            // BinaryCache holds an in-process narinfo cache, so re-create it
-            // each iteration to measure cold parse + traversal, not HashMap hits.
             let mut cache = BinaryCache::new(tmp.path());
             let mut scanner = DependencyScanner::new();
-            scanner.enqueue(root.clone());
+            scanner.enqueue(root);
             black_box(scanner.scan(&mut cache, &progress));
         });
     });

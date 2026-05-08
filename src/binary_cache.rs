@@ -1,8 +1,12 @@
 use std::{
+    ffi::OsString,
     fs,
-    io::{Error as IoError, ErrorKind},
+    io::Error as IoError,
+    os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
 };
+
+use crate::store_hash::StoreHash;
 
 pub struct BinaryCache {
     pub path: PathBuf,
@@ -15,31 +19,22 @@ impl BinaryCache {
 
     /// # Errors
     ///
-    /// Returns `InvalidInput` if `path` is not a `/nix/store/<hash>-<name>`
-    /// path, or any I/O error from reading the corresponding `.narinfo`.
-    pub fn get_info_by_store_path(&mut self, path: &Path) -> Result<Info, IoError> {
-        // Extract the 32-char base32 hash from /nix/store/<hash>-<name>.
-        let hash = path
-            .strip_prefix("/nix/store")
-            .ok()
-            .and_then(|rest| rest.to_str())
-            .filter(|rest| rest.len() >= 32)
-            .map(|rest| &rest[..32])
-            .filter(|hash| hash.bytes().all(|b| b.is_ascii_alphanumeric()));
-        let Some(hash) = hash else {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                format!("not a store path: {}", path.display()),
-            ));
-        };
-        self.get_info_by_hash(hash)
+    /// Returns any I/O error from opening or reading `<hash>.narinfo`.
+    pub fn get_info_by_hash(&mut self, hash: StoreHash) -> Result<Info, IoError> {
+        Info::open(&self.narinfo_path(hash))
     }
 
-    /// # Errors
-    ///
-    /// Returns any I/O error from opening or reading `<hash>.narinfo`.
-    pub fn get_info_by_hash(&mut self, hash: &str) -> Result<Info, IoError> {
-        Info::open(&self.path.join(format!("{hash}.narinfo")))
+    /// `<cache>/<hash>.narinfo`, built without round-tripping through
+    /// `format!` and `Path::join`, which both heap-allocate per call.
+    fn narinfo_path(&self, hash: StoreHash) -> PathBuf {
+        const EXT: &[u8] = b".narinfo";
+        let dir = self.path.as_os_str().as_encoded_bytes();
+        let mut buf = Vec::with_capacity(dir.len() + 1 + 32 + EXT.len());
+        buf.extend_from_slice(dir);
+        buf.push(b'/');
+        buf.extend_from_slice(hash.as_str().as_bytes());
+        buf.extend_from_slice(EXT);
+        PathBuf::from(OsString::from_vec(buf))
     }
 }
 
@@ -47,17 +42,15 @@ impl BinaryCache {
 ///
 /// `Info` is held in a long-lived `Vec` sized to the closure of all GC roots,
 /// which on a busy server can be hundreds of thousands of entries. Storing
-/// only what we use, in compact owned strings rather than a per-file
-/// `HashMap<String, String>`, keeps that memory bounded.
+/// only what we use, with references and deriver as fixed-size hashes rather
+/// than owned strings, keeps that memory bounded.
 #[derive(Debug, Default)]
 struct Fields {
     url: Option<Box<str>>,
     file_size: Option<u64>,
     nar_size: Option<u64>,
-    // References and Deriver are 32-char hash prefixes of /nix/store paths;
-    // store the full strings so callers can join them onto /nix/store.
-    references: Box<[Box<str>]>,
-    deriver: Option<Box<str>>,
+    references: Box<[StoreHash]>,
+    deriver: Option<StoreHash>,
 }
 
 #[derive(Debug)]
@@ -86,13 +79,9 @@ impl Info {
                 "URL" => fields.url = Some(val.into()),
                 "FileSize" => fields.file_size = val.parse().ok(),
                 "NarSize" => fields.nar_size = val.parse().ok(),
-                "Deriver" if !val.is_empty() => fields.deriver = Some(val.into()),
+                "Deriver" => fields.deriver = StoreHash::from_name(val),
                 "References" => {
-                    fields.references = val
-                        .split(' ')
-                        .filter(|s| !s.is_empty())
-                        .map(Into::into)
-                        .collect();
+                    fields.references = val.split(' ').filter_map(StoreHash::from_name).collect();
                 }
                 _ => {}
             }
@@ -120,11 +109,11 @@ impl Info {
     }
 
     #[must_use]
-    pub fn deriver(&self) -> Option<&str> {
-        self.fields.deriver.as_deref()
+    pub fn deriver(&self) -> Option<StoreHash> {
+        self.fields.deriver
     }
 
-    pub fn references(&self) -> impl Iterator<Item = &str> {
-        self.fields.references.iter().map(AsRef::as_ref)
+    pub fn references(&self) -> impl Iterator<Item = StoreHash> {
+        self.fields.references.iter().copied()
     }
 }

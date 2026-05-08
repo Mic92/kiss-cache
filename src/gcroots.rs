@@ -6,10 +6,12 @@ use std::{
 };
 use walkdir::WalkDir;
 
+use crate::store_hash::StoreHash;
+
 pub struct GcRoots {
     queue: VecDeque<PathBuf>,
     seen: HashSet<PathBuf>,
-    store_paths: HashSet<PathBuf>,
+    store_hashes: HashSet<StoreHash>,
 }
 
 impl Default for GcRoots {
@@ -24,29 +26,24 @@ impl GcRoots {
         GcRoots {
             queue: VecDeque::with_capacity(1),
             seen: HashSet::new(),
-            store_paths: HashSet::new(),
+            store_hashes: HashSet::new(),
         }
-    }
-
-    fn add_store_path(&mut self, mut path: PathBuf) {
-        let components = path.components().count();
-        for _ in 4..components {
-            path.pop();
-        }
-        self.store_paths.insert(path);
     }
 
     pub fn enqueue<P: Into<PathBuf>>(&mut self, path: P) {
         let path = path.into();
-        if path.starts_with("/nix/store") {
-            self.add_store_path(path);
-        } else if self.seen.insert(path.clone()) {
+        if let Some(hash) = StoreHash::from_store_path(&path) {
+            self.store_hashes.insert(hash);
+        } else if !path.starts_with("/nix/store") && self.seen.insert(path.clone()) {
+            // Garbage roots that point at /nix/store but lack a hash (e.g.
+            // /nix/store itself) yield no StoreHash; ignore them rather than
+            // recursing into the store.
             self.queue.push_back(path);
         }
     }
 
     #[must_use]
-    pub fn scan(mut self, progress: &ProgressBar) -> HashSet<PathBuf> {
+    pub fn scan(mut self, progress: &ProgressBar) -> HashSet<StoreHash> {
         while let Some(path) = self.queue.pop_front() {
             progress.set_position((self.seen.len() - self.queue.len()) as u64);
             progress.set_length(self.seen.len() as u64);
@@ -73,6 +70,6 @@ impl GcRoots {
             }
         }
 
-        self.store_paths
+        self.store_hashes
     }
 }

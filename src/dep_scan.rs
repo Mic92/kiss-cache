@@ -1,15 +1,13 @@
-use std::{
-    collections::{HashSet, VecDeque},
-    path::PathBuf,
-};
+use std::collections::{HashSet, VecDeque};
 
 use indicatif::ProgressBar;
 
 use crate::binary_cache::{BinaryCache, Info};
+use crate::store_hash::StoreHash;
 
 pub struct DependencyScanner {
-    queue: VecDeque<PathBuf>,
-    seen: HashSet<PathBuf>,
+    queue: VecDeque<StoreHash>,
+    seen: HashSet<StoreHash>,
 }
 
 impl Default for DependencyScanner {
@@ -27,30 +25,27 @@ impl DependencyScanner {
         }
     }
 
-    pub fn enqueue(&mut self, path: PathBuf) {
-        if self.seen.insert(path.clone()) {
-            self.queue.push_back(path);
+    pub fn enqueue(&mut self, hash: StoreHash) {
+        if self.seen.insert(hash) {
+            self.queue.push_back(hash);
         }
     }
 
-    /// Walk the closure of all enqueued store paths and return the parsed
+    /// Walk the closure of all enqueued store hashes and return the parsed
     /// `Info` for every one whose narinfo exists in the cache.
     pub fn scan(mut self, cache: &mut BinaryCache, progress: &ProgressBar) -> Vec<Info> {
         // seen already holds all initially-enqueued paths; the closure can
         // only grow from there. Reserving avoids repeated reallocation.
         let mut found = Vec::with_capacity(self.seen.len());
-        while let Some(path) = self.queue.pop_front() {
+        while let Some(hash) = self.queue.pop_front() {
             progress.set_position((self.seen.len() - self.queue.len()) as u64);
             progress.set_length(self.seen.len() as u64);
 
-            let Ok(info) = cache.get_info_by_store_path(&path) else {
+            let Ok(info) = cache.get_info_by_hash(hash) else {
                 continue;
             };
-            for reference in info.references() {
-                self.enqueue(PathBuf::from("/nix/store").join(reference));
-            }
-            if let Some(deriver) = info.deriver() {
-                self.enqueue(PathBuf::from("/nix/store").join(deriver));
+            for hash in info.references().chain(info.deriver()) {
+                self.enqueue(hash);
             }
             found.push(info);
         }
