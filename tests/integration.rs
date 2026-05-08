@@ -60,6 +60,8 @@ impl Fixture {
              {deriver_line}"
         );
         fs::write(self.cache.join(format!("{hash}.narinfo")), narinfo).unwrap();
+        // Optional NAR listing alongside the narinfo, same key.
+        fs::write(self.cache.join(format!("{hash}.ls")), "{}").unwrap();
     }
 
     /// Create a gcroot symlink pointing at /nix/store/<hash>-<name>.
@@ -93,6 +95,10 @@ impl Fixture {
 
     fn nar_exists(&self, hash: &str) -> bool {
         self.cache.join(format!("nar/{hash}.nar.xz")).exists()
+    }
+
+    fn ls_exists(&self, hash: &str) -> bool {
+        self.cache.join(format!("{hash}.ls")).exists()
     }
 }
 
@@ -253,4 +259,16 @@ fn relative_symlink_in_gcroots_is_resolved() {
         "root reachable via relative symlink must be kept"
     );
     assert!(!fx.narinfo_exists(HASH_GARBAGE));
+}
+
+#[test]
+fn ls_listing_pruned_with_narinfo() {
+    let fx = standard_fixture();
+    fx.run(false);
+    assert!(fx.ls_exists(HASH_ROOT), "kept narinfo keeps its .ls");
+    assert!(fx.ls_exists(HASH_DEP), "kept narinfo keeps its .ls");
+    assert!(
+        !fx.ls_exists(HASH_GARBAGE),
+        "pruned narinfo also prunes its .ls"
+    );
 }

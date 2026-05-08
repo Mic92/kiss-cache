@@ -48,8 +48,8 @@ Options:
 2. For each root, parse `<CACHEDIR>/<hash>.narinfo` and recurse into its
    `References:` and `Deriver:` fields. The transitive closure is the set
    of reachable hashes.
-3. Delete every `*.narinfo` and `nar/*` file in `CACHEDIR` not reachable
-   from any root.
+3. Delete every `*.narinfo`, `*.ls` and `nar/*` file in `CACHEDIR` not
+   reachable from any root.
 
 Plain files in a gcroots directory whose basename is `<hash>-<name>` are
 also treated as roots, so processes that cannot create symlinks (e.g.
@@ -59,6 +59,12 @@ an empty marker file.
 A persistent metadata cache at `<CACHEDIR>/.kiss-cache.closures` skips
 re-parsing unchanged `.narinfo` files on repeated runs. It is safe to
 delete.
+
+Not pruned: `log/` (build logs, keyed by `.drv` name), `realisations/`
+(content-addressed derivation outputs) and `debuginfo/` (separated
+debug symbols). Their keys do not map back to a store hash without
+extra parsing, so they accumulate. If you write them, clean them out of
+band or open an issue.
 
 ## NixOS modules
 

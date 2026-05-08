@@ -11,6 +11,14 @@ use std::ffi::OsStr;
 /// most ~15 times a second; formatting more often than that is wasted work.
 const MSG_INTERVAL: u64 = 256;
 
+/// `<hash>.ls` as an `OsString`, built without `format!`.
+fn listing_name(hash: StoreHash) -> OsString {
+    let mut s = OsString::with_capacity(35);
+    s.push(hash.as_str());
+    s.push(".ls");
+    s
+}
+
 /// `<hash>.narinfo` as an `OsString`, built without `format!`.
 fn narinfo_name(hash: StoreHash) -> OsString {
     let mut s = OsString::with_capacity(32 + 8);
@@ -108,6 +116,10 @@ pub fn run(config: &Config, progress: &Progress) {
         file_size += info.file_size;
         nar_size += info.nar_size;
         keep_infos.insert(narinfo_name(hash));
+        // NAR listings (`<hash>.ls`, written by `nix store ls --json` and
+        // some tooling) share the narinfo's key. Treat them as part of the
+        // entry so they do not accumulate as orphans.
+        keep_infos.insert(listing_name(hash));
         // Rebuilding the message string per item is more expensive than the
         // bookkeeping it reports on. Only re-format when the bar will
         // actually redraw.
@@ -126,7 +138,8 @@ pub fn run(config: &Config, progress: &Progress) {
     ));
 
     let rm_narinfo_size = sweep(&cache_path, &progress.rm_narinfo, config.dry_run, |name| {
-        name.as_encoded_bytes().ends_with(b".narinfo") && !keep_infos.contains(name)
+        let n = name.as_encoded_bytes();
+        (n.ends_with(b".narinfo") || n.ends_with(b".ls")) && !keep_infos.contains(name)
     });
     drop(keep_infos);
     progress
