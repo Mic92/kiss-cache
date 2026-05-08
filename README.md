@@ -135,6 +135,35 @@ key to `trusted-public-keys` alongside this cache's own. Stored
 entries are not registered as gcroots and are reclaimed by the next
 prune unless reachable; they are refetched on demand.
 
+## Without flakes
+
+The package is a plain `callPackage`-able derivation and the modules
+resolve their default package the same way:
+
+```nix
+# configuration.nix
+let
+  kiss-cache = builtins.fetchTarball
+    "https://github.com/Mic92/kiss-cache/archive/main.tar.gz";
+in
+{
+  imports = [ "${kiss-cache}/nixos" ];
+
+  services.kiss-cache-serve = { ... };
+  services.kiss-cache = { ... };
+}
+```
+
+Or just the package:
+
+```nix
+environment.systemPackages = [
+  (pkgs.callPackage "${kiss-cache}/package.nix" { })
+];
+```
+
+Pin a specific revision with `fetchFromGitHub` + a hash in production.
+
 ## Setting up mutual TLS
 
 Both sides authenticate with a certificate: the server proves who it is

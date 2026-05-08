@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 let
@@ -12,6 +13,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
+      default = pkgs.callPackage ../package.nix { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../package.nix { }";
       description = "The kiss-cache package to use.";
     };
 
