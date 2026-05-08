@@ -59,9 +59,9 @@ impl GcRoots {
                 self.follow_symlink(&path);
             } else if meta.is_dir() {
                 self.recurse_into(&path);
+            } else {
+                self.try_marker_file(&path);
             }
-            // Plain files (e.g. lock files under gcroots/profiles) carry no
-            // root information.
         }
 
         self.store_hashes
@@ -80,6 +80,23 @@ impl GcRoots {
             _ => target,
         };
         self.enqueue(target);
+    }
+
+    /// A plain file whose basename is `<hash>-<name>` is treated as a root
+    /// for `/nix/store/<basename>`.
+    ///
+    /// Remote builders push to the cache via HTTP `PUT`, which cannot create
+    /// symlinks. They register roots by uploading an empty marker file named
+    /// after the store path. Files with non-store-path names (lock files,
+    /// `.gitignore`, etc.) are silently ignored.
+    fn try_marker_file(&mut self, path: &Path) {
+        if let Some(hash) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(StoreHash::from_name)
+        {
+            self.store_hashes.insert(hash);
+        }
     }
 
     fn recurse_into(&mut self, dir: &Path) {

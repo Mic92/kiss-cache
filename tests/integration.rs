@@ -135,6 +135,23 @@ fn dry_run_deletes_nothing() {
     }
 }
 
+/// A gcroot can also be a plain file whose basename is `<hash>-<name>`.
+/// Remote builders pushing to the cache via HTTP cannot create symlinks,
+/// so they register roots by `PUT`ing an empty marker file to the gcroots
+/// directory. The pruner must treat that file like a symlink to
+/// `/nix/store/<basename>`.
+#[test]
+fn gcroot_marker_file_is_a_root() {
+    let fx = Fixture::new();
+    fx.add_narinfo(HASH_ROOT, "root", &[], None);
+    fx.add_narinfo(HASH_GARBAGE, "garbage", &[], None);
+    fs::write(fx.gcroots.join(format!("{HASH_ROOT}-root")), "").unwrap();
+
+    fx.run(false);
+    assert!(fx.narinfo_exists(HASH_ROOT));
+    assert!(!fx.narinfo_exists(HASH_GARBAGE));
+}
+
 #[test]
 fn gcroot_in_nested_dir_is_followed() {
     let fx = Fixture::new();
