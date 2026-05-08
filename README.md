@@ -113,7 +113,7 @@ the default xz, which is the bottleneck when substituting from a fast
 local cache, and compresses nearly as well.
 
 ```console
-$ store='https://cache.example.org?compression=zstd&tls-certificate=writer.pem&tls-private-key=writer.key'
+$ store='https://cache.example.org?compression=zstd&secret-key=/etc/nix/cache-key&tls-certificate=writer.pem&tls-private-key=writer.key'
 $ nix copy --to "$store" /nix/store/abc...-hello
 $ curl --cert writer.pem --key writer.key -X PUT --data-binary @/dev/null \
     "https://cache.example.org/gcroots/$(basename /nix/store/abc...-hello)"
@@ -163,6 +163,36 @@ environment.systemPackages = [
 ```
 
 Pin a specific revision with `fetchFromGitHub` + a hash in production.
+
+## Signing
+
+mTLS only proves a path came from the cache server. Nix store
+signatures prove the path was *built* by someone whose key the client
+trusts, which protects against a compromised cache server serving
+tampered paths. They are independent layers; use both.
+
+Generate a key pair:
+
+```console
+$ nix key generate-secret --key-name cache.example.org-1 > cache-key
+$ nix key convert-secret-to-public < cache-key > cache-key.pub
+$ cat cache-key.pub
+cache.example.org-1:zR8...=
+```
+
+Deploy the secret key to every writer (e.g. via sops-nix). The
+`secret-key` store parameter signs paths as they are pushed:
+
+```
+nix copy --to 'https://cache.example.org?secret-key=/etc/nix/cache-key&...' ...
+```
+
+Clients add the public key to `trusted-public-keys` (see the client
+config in the next section). Nix refuses to substitute a path whose
+signature does not match a trusted key.
+
+If you set `fallbackCache`, clients also need the upstream's public
+key, e.g. `cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=`.
 
 ## Setting up mutual TLS
 
@@ -232,7 +262,7 @@ nix.settings = {
   substituters = [
     "https://cache.example.org?tls-certificate=/run/secrets/cache-client.pem&tls-private-key=/run/secrets/cache-client.key"
   ];
-  trusted-public-keys = [ "cache.example.org:..." ];
+  trusted-public-keys = [ "cache.example.org-1:zR8...=" ];
   # Only needed if the server cert is signed by your private CA.
   ssl-cert-file = "/run/secrets/cache-ca.pem";
 };
