@@ -221,6 +221,38 @@ testers.runNixOSTest {
         )
         importer.fail(f"curl --fail -sk --cacert {ca} https://cache/gcroots/{marker}")
 
+    with subtest("only a writer may DELETE a gcroot marker"):
+        importer.fail(
+            f"curl --fail -s --cacert {ca} --cert {cert} --key {key} "
+            f"-X DELETE https://cache/gcroots/{marker}"
+        )
+        cache.succeed(f"test -e /var/lib/nix-cache/gcroots/{marker}")
+        importer.succeed(
+            f"curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            f"-X DELETE https://cache/gcroots/{marker}"
+        )
+        cache.fail(f"test -e /var/lib/nix-cache/gcroots/{marker}")
+        # Restore for the pruner subtests below.
+        importer.succeed(
+            f"echo {push} | curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            f"-X PUT --data-binary @- https://cache/gcroots/{marker}"
+        )
+
+    with subtest("DELETE cannot escape the gcroots directory"):
+        evil = push.split("/")[-1].split("-")[0] + ".narinfo"
+        # nginx normalises `..` before location matching, so this resolves
+        # to `/{evil}` under the `/` location, which does not allow DELETE.
+        # A reader must not be able to delete cache entries either way.
+        importer.fail(
+            f"curl --fail -s --path-as-is --cacert {ca} --cert {cert} --key {key} "
+            f"-X DELETE 'https://cache/gcroots/../{evil}'"
+        )
+        importer.fail(
+            f"curl --fail -s --path-as-is --cacert {ca} --cert {wcert} --key {wkey} "
+            f"-X DELETE 'https://cache/gcroots/../{evil}'"
+        )
+        cache.succeed(f"test -e /var/lib/nix-cache/{evil}")
+
     with subtest("kiss-cache-update is a no-op when already on the published system"):
         cur = importer.succeed("readlink /run/current-system").strip()
         before = importer.succeed("readlink -f /nix/var/nix/profiles/system").strip()
