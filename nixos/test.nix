@@ -72,31 +72,33 @@ testers.runNixOSTest {
 
       environment.etc."nix/secret-key".text = signingKey;
 
-      services.nginx.virtualHosts."upstream".root = "/var/lib/upstream-cache";
       networking.hosts."127.0.0.1" = [ "upstream" ];
 
-      services.kiss-cache-serve = {
-        enable = true;
-        cacheDir = "/var/lib/nix-cache";
-        hostName = "cache";
-        sslCertificate = "${certs}/server.pem";
-        sslCertificateKey = "${certs}/server.key";
-        clientCA = "${certs}/ca.pem";
-        writers = [ "CN=writer" ];
-        fallbackCache = "http://upstream";
-        gcRootMaxAge = "7d";
-      };
-
-      services.kiss-cache = {
-        enable = true;
-        cacheDir = "/var/lib/nix-cache";
-        gcRoots = [ "/var/lib/nix-cache-roots" ];
+      services = {
+        nginx.virtualHosts."upstream".root = "/var/lib/upstream-cache";
+        kiss-cache-serve = {
+          enable = true;
+          cacheDir = "/var/lib/nix-cache";
+          hostName = "cache";
+          sslCertificate = "${certs}/server.pem";
+          sslCertificateKey = "${certs}/server.key";
+          clientCA = "${certs}/ca.pem";
+          writers = [ "CN=writer" ];
+          fallbackCache = "http://upstream";
+          gcRootMaxAge = "7d";
+        };
+        kiss-cache = {
+          enable = true;
+          cacheDir = "/var/lib/nix-cache";
+          gcRoots = [ "/var/lib/nix-cache-roots" ];
+        };
       };
     };
 
   nodes.importer =
     { lib, ... }:
     {
+      imports = [ nixosModule ];
       virtualisation.writableStore = true;
       nix.settings = {
         experimental-features = [ "nix-command" ];
@@ -106,6 +108,16 @@ testers.runNixOSTest {
         trusted-public-keys = lib.mkForce [ publicKey ];
         ssl-cert-file = "${certs}/ca.pem";
       };
+      services.kiss-cache-update = {
+        enable = true;
+        cacheUrl = "https://cache";
+        marker = "importer";
+        tlsCertificate = "${certs}/client.pem";
+        tlsPrivateKey = "${certs}/client.key";
+        tlsCACertificate = "${certs}/ca.pem";
+      };
+      # Don't let the timer fire on its own mid-test.
+      systemd.timers.kiss-cache-update.enable = false;
     };
 
   testScript = ''
@@ -202,6 +214,95 @@ testers.runNixOSTest {
         )
         cache.succeed(f"grep -qx {push} /var/lib/nix-cache/gcroots/{marker}")
 
+    with subtest("reader can GET a gcroot marker, no cert cannot"):
+        importer.succeed(
+            f"curl --fail -s --cacert {ca} --cert {cert} --key {key} "
+            f"https://cache/gcroots/{marker} | grep -qx {push}"
+        )
+        importer.fail(f"curl --fail -sk --cacert {ca} https://cache/gcroots/{marker}")
+
+    with subtest("kiss-cache-update is a no-op when already on the published system"):
+        cur = importer.succeed("readlink /run/current-system").strip()
+        before = importer.succeed("readlink -f /nix/var/nix/profiles/system").strip()
+        cache.succeed(f"echo {cur} > /var/lib/nix-cache/gcroots/importer")
+        importer.succeed("systemctl start kiss-cache-update.service")
+        after = importer.succeed("readlink -f /nix/var/nix/profiles/system").strip()
+        assert before == after, f"profile changed despite already-current system: {before} -> {after}"
+
+    with subtest("kiss-cache-update is a no-op when no marker is published"):
+        cache.succeed("rm /var/lib/nix-cache/gcroots/importer")
+        importer.succeed("systemctl start kiss-cache-update.service")
+        after = importer.succeed("readlink -f /nix/var/nix/profiles/system").strip()
+        assert before == after, f"profile changed on missing marker: {before} -> {after}"
+
+    with subtest("kiss-cache-update CLI requires an action and accepts a marker URL"):
+        importer.fail("kiss-cache-update")
+        importer.fail("kiss-cache-update bogus")
+        cache.succeed(f"echo {cur} > /var/lib/nix-cache/gcroots/staging")
+        importer.succeed("kiss-cache-update switch https://cache/gcroots/staging")
+
+    with subtest("kiss-cache-update realises and switches to a new system"):
+        # Stub toplevel exercising the substituter URL and `nix-store
+        # --realise` that the no-op subtests above never reach. It
+        # shares kernel/initrd/kernel-params with the running system so
+        # the update script takes the in-place switch branch, has a
+        # no-op switch-to-configuration so the test VM stays sane, and
+        # a sentinel file to prove the right closure was activated.
+        # `nix-store --add` registers the directory directly, skipping
+        # the build sandbox (which lacks coreutils).
+        booted = importer.succeed("readlink /run/booted-system").strip()
+        importer.succeed(
+            "set -e; rm -rf /tmp/fake-system; mkdir -p /tmp/fake-system/bin; "
+            f"for f in kernel initrd kernel-params; do cp -P {booted}/$f /tmp/fake-system/$f 2>/dev/null || true; done; "
+            "echo updated > /tmp/fake-system/sentinel; "
+            "printf '#!/bin/sh\\nexit 0\\n' > /tmp/fake-system/bin/switch-to-configuration; "
+            "chmod +x /tmp/fake-system/bin/switch-to-configuration"
+        )
+        fake = importer.succeed("nix-store --add /tmp/fake-system").strip()
+        importer.succeed(f"nix copy --no-check-sigs --to '{wstore}' {fake}")
+        importer.succeed(
+            f"echo {fake} | curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            f"-X PUT --data-binary @- https://cache/gcroots/realise-test"
+        )
+        # Drop the local copy so realise must actually substitute.
+        importer.succeed(f"nix-store --delete {fake}")
+        importer.fail(f"test -e {fake}")
+        out = importer.succeed(
+            "kiss-cache-update switch https://cache/gcroots/realise-test 2>&1"
+        )
+        # The fake shares kernel/initrd/kernel-params with the booted
+        # system; the script must take the in-place switch branch, not
+        # the boot-changed branch. Catches false positives in
+        # boot_fingerprint().
+        assert "needs a reboot" not in out, f"spurious boot change detected:\n{out}"
+        importer.succeed(f"test -e {fake}/sentinel")
+        prof = importer.succeed("readlink -f /nix/var/nix/profiles/system").strip()
+        assert prof == fake, f"profile not set: {prof} != {fake}"
+        # Restore the real system profile for subsequent subtests.
+        importer.succeed(f"nix-env --profile /nix/var/nix/profiles/system --set {before}")
+
+    with subtest("kiss-cache-update detects a kernel-parameter change"):
+        # Same stub, different kernel-params: the script must take the
+        # boot-changed branch. Use action=switch so the test VM is not
+        # actually rebooted; the warning proves which branch ran.
+        importer.succeed(
+            "echo extra-param >> /tmp/fake-system/kernel-params; "
+            "sed -i s/updated/changed/ /tmp/fake-system/sentinel"
+        )
+        fake2 = importer.succeed("nix-store --add /tmp/fake-system").strip()
+        importer.succeed(f"nix copy --no-check-sigs --to '{wstore}' {fake2}")
+        importer.succeed(
+            f"echo {fake2} | curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            f"-X PUT --data-binary @- https://cache/gcroots/realise-test"
+        )
+        importer.succeed(f"nix-store --delete {fake2}")
+        out = importer.succeed(
+            "kiss-cache-update switch https://cache/gcroots/realise-test 2>&1"
+        )
+        assert "needs a reboot" in out, f"boot change not detected:\n{out}"
+        importer.succeed(f"nix-env --profile /nix/var/nix/profiles/system --set {before}")
+
+    with subtest("pruner keeps closures registered via PUT marker"):
         cache.succeed("systemctl start kiss-cache.service")
         # The pushed closure is reachable via the marker; still fetchable.
         importer.succeed(f"nix-store --delete {push} || true")

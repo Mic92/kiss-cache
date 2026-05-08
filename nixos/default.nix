@@ -11,6 +11,7 @@ in
   imports = [
     ./kiss-cache.nix
     ./kiss-cache-serve.nix
+    ./kiss-cache-update.nix
   ];
 
   # When serving with writers, their PUT marker files are roots.

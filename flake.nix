@@ -35,6 +35,7 @@
       nixosModules = {
         kiss-cache = ./nixos/kiss-cache.nix;
         kiss-cache-serve = ./nixos/kiss-cache-serve.nix;
+        kiss-cache-update = ./nixos/kiss-cache-update.nix;
         default = ./nixos/default.nix;
       };
 

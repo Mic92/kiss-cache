@@ -130,15 +130,14 @@ in
       '';
       virtualHosts.${cfg.hostName} = {
         forceSSL = true;
-        sslCertificate = cfg.sslCertificate;
-        sslCertificateKey = cfg.sslCertificateKey;
+        inherit (cfg) sslCertificate sslCertificateKey;
         root = cfg.cacheDir;
         extraConfig = ''
           ssl_client_certificate ${cfg.clientCA};
           ssl_verify_client on;
         '';
-        locations."/" = {
-          extraConfig = ''
+        locations = {
+          "/".extraConfig = ''
             # narinfo and nar files are content-addressed and immutable.
             expires max;
             add_header Cache-Control immutable;
@@ -172,43 +171,59 @@ in
             client_body_temp_path ${cfg.cacheDir}/.tmp;
             client_max_body_size 0;
           '';
-        };
-        locations."= /nix-cache-info".extraConfig = ''
-          default_type text/plain;
-          return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n";
-        '';
-        # On local miss, fetch from the upstream cache and store the result
-        # at the same path so the next request is a local hit. proxy_store is
-        # not subject to expiry, which matches the immutability of
-        # content-addressed cache entries; stale entries are reclaimed by the
-        # pruner like any other unreachable file.
-        locations."@fallback" = lib.mkIf (cfg.fallbackCache != null) {
-          extraConfig = ''
-            internal;
-            proxy_pass ${cfg.fallbackCache};
-            proxy_set_header Host ${builtins.head (builtins.match "https?://([^/]+).*" cfg.fallbackCache)};
-            proxy_ssl_server_name on;
-            proxy_store on;
-            proxy_store_access user:rw group:r all:r;
-            proxy_temp_path ${cfg.cacheDir}/.tmp;
-            # The upstream responds 404 for paths it does not have either.
-            # Do not store error pages.
-            proxy_intercept_errors off;
+          "= /nix-cache-info".extraConfig = ''
+            default_type text/plain;
+            return 200 "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n";
           '';
-        };
-        # Marker files registering remote gcroots (see `writers` doc). The
-        # pruner reads this directory; nginx never serves its contents.
-        locations."/gcroots/" = lib.mkIf (cfg.writers != [ ]) {
-          extraConfig = ''
-            if ($nix_cache_writer != 1) {
-              return 403;
-            }
-            dav_methods PUT DELETE;
-            create_full_put_path on;
-            dav_access user:rw group:r all:r;
-            client_body_temp_path ${cfg.cacheDir}/.tmp;
-            client_max_body_size 4k;
-          '';
+          # On local miss, fetch from the upstream cache and store the result
+          # at the same path so the next request is a local hit. proxy_store
+          # is not subject to expiry, which matches the immutability of
+          # content-addressed cache entries; stale entries are reclaimed by
+          # the pruner like any other unreachable file.
+          "@fallback" = lib.mkIf (cfg.fallbackCache != null) {
+            extraConfig = ''
+              internal;
+              proxy_pass ${cfg.fallbackCache};
+              proxy_set_header Host ${builtins.head (builtins.match "https?://([^/]+).*" cfg.fallbackCache)};
+              proxy_ssl_server_name on;
+              proxy_store on;
+              proxy_store_access user:rw group:r all:r;
+              proxy_temp_path ${cfg.cacheDir}/.tmp;
+              # The upstream responds 404 for paths it does not have either.
+              # Do not store error pages.
+              proxy_intercept_errors off;
+            '';
+          };
+          # Marker files registering remote gcroots (see `writers` doc).
+          # Writers PUT/DELETE markers; any authenticated client may GET
+          # them, so target machines can use a marker as their profile
+          # pointer (see `services.kiss-cache-update`).
+          "/gcroots/" = lib.mkIf (cfg.writers != [ ]) {
+            extraConfig = ''
+              # Same write ACL as `/`: any authenticated client may GET a
+              # marker (used as a profile pointer by kiss-cache-update),
+              # only writers may PUT or DELETE.
+              set $deny_write 0;
+              if ($request_method !~ ^(GET|HEAD)$) {
+                set $deny_write 1;
+              }
+              if ($nix_cache_writer = 1) {
+                set $deny_write 0;
+              }
+              if ($deny_write = 1) {
+                return 403;
+              }
+              dav_methods PUT DELETE;
+              create_full_put_path on;
+              dav_access user:rw group:r all:r;
+              client_body_temp_path ${cfg.cacheDir}/.tmp;
+              client_max_body_size 4k;
+              # Markers change on every push; do not let nix's HTTP cache
+              # serve stale ones.
+              expires off;
+              add_header Cache-Control no-store;
+            '';
+          };
         };
       };
     };
