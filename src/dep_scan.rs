@@ -59,13 +59,11 @@ impl DependencyScanner {
         let high_water = workers * 4;
 
         thread::scope(|scope| {
-            // One bounded SPSC channel per worker; the coordinator round-robins
-            // dispatches and never gives a worker more than a few outstanding
-            // items, so a slow narinfo read cannot starve the rest of the
-            // pool. Bounded channels use array-based storage, avoiding the
-            // per-send heap allocation that the unbounded list channel does.
-            // Workers always have a small backlog so their receive rarely
-            // parks, which keeps sender futex wakes off the hot path.
+            // One bounded channel per worker, round-robined, so a slow
+            // narinfo read cannot starve the pool. Bounded channels use
+            // array-backed storage rather than allocating a node per send,
+            // and the small per-worker backlog keeps receivers from parking,
+            // which keeps futex wakes off the dispatch hot path.
             let (done_tx, done_rx) = mpsc::sync_channel::<(StoreHash, Option<NarInfo>)>(high_water);
             let mut work_txs = Vec::with_capacity(workers);
             for _ in 0..workers {
@@ -89,7 +87,6 @@ impl DependencyScanner {
                 while in_flight < high_water
                     && let Some(hash) = self.queue.pop_front()
                 {
-                    // The persistent closure cache answers without I/O.
                     if let Some(info) = closures.get(&hash) {
                         for hash in info.references.iter().chain(&info.deriver) {
                             self.enqueue(*hash);

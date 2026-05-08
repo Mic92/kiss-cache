@@ -56,7 +56,6 @@ impl Progress {
 /// Run a full prune: scan GC roots, walk the closure, delete unreachable
 /// narinfo and nar files. Honors `config.dry_run`.
 pub fn run(config: &Config, progress: &Progress) {
-    // Scan garbage-collector roots
     let mut gcroots = gcroots::GcRoots::new();
     for gcroot in &config.gcroots {
         gcroots.enqueue(gcroot);
@@ -64,7 +63,6 @@ pub fn run(config: &Config, progress: &Progress) {
     let store_hashes = gcroots.scan(&progress.gcroots);
     progress.gcroots.finish();
 
-    // Scan gcroots dependencies
     let cache = binary_cache::BinaryCache::new(&config.cache_dir);
     let closure_cache_path = closure_cache::default_path(&config.cache_dir);
     let closures = closure_cache::load(&closure_cache_path);
@@ -81,9 +79,7 @@ pub fn run(config: &Config, progress: &Progress) {
         eprintln!("Cannot write closure cache: {e}");
     }
 
-    // Statistics
     let (mut file_size, mut nar_size) = (0u64, 0u64);
-    // Set of files to keep
     progress.keep.set_length(infos.len() as u64);
     // Both sweep passes walk a single directory level and compare each
     // entry against a keep-set. Keying on the file name alone avoids
