@@ -1,3 +1,6 @@
+// In tests, panicking on a fixture-setup failure is exactly what we want.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! End-to-end test: build a fake binary cache and a gcroots tree on disk,
 //! run the compiled binary against them, and assert which files survive.
 

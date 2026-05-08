@@ -79,12 +79,15 @@ fn main() -> ExitCode {
 
 fn run(args: &Args) {
     let make_spinner = |color| {
-        ProgressStyle::with_template(
-            &"{spinner} {prefix:.bold.dim} {wide_bar:.COLOR} [{pos:.bold.dim}/{len:.bold}] {msg}"
-                .replace("COLOR", color),
-        )
-        .unwrap()
-        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+        let template = format!(
+            "{{spinner}} {{prefix:.bold.dim}} {{wide_bar:.{color}}} [{{pos:.bold.dim}}/{{len:.bold}}] {{msg}}"
+        );
+        // The template is a fixed literal; only the colour varies, and all
+        // colours we pass are valid. Fall back to the default style rather
+        // than crash if indicatif ever rejects one.
+        ProgressStyle::with_template(&template)
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
     };
     let progress = MultiProgress::new();
     let progress_gcroots = progress.add(ProgressBar::new(0));
@@ -199,7 +202,15 @@ fn sweep(
     let mut total = 0;
     progress.set_length(0);
     for entry in WalkDir::new(dir).min_depth(1).max_depth(1) {
-        let entry = entry.unwrap();
+        // An entry can become unreadable mid-scan (concurrent deletion,
+        // permissions); skip rather than abort the sweep.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                eprintln!("Cannot read cache entry: {e}");
+                continue;
+            }
+        };
         let path = entry.path();
         if !should_delete(path) {
             continue;

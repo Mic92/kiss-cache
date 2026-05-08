@@ -15,3 +15,9 @@ indicatif = "0.18"
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints.clippy]
+# This tool deletes files; it must never crash on bad input or filesystem
+# races. Every fallible operation must be handled explicitly.
+unwrap_used = "deny"
+expect_used = "deny"
