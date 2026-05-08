@@ -23,24 +23,6 @@ which introduced the GC-root-based approach. Adds a persistent metadata
 cache, parallel scanning, NixOS modules for serving over mTLS, and
 HTTP-pushable GC roots.
 
-## Usage
-
-```console
-$ nix run github:Mic92/kiss-cache -- --help
-Trim Nix binary caches according to GC roots
-
-Usage: kiss-cache [-n|--dry-run] <CACHEDIR> <GCROOTS>...
-
-Arguments:
-  CACHEDIR    Cache directory
-  GCROOTS     Directories of marker files naming store paths to keep
-
-Options:
-  -n, --dry-run  Do not actually delete files
-  -h, --help     Print help
-  -V, --version  Print version
-```
-
 ## How it works
 
 1. Read every plain file under each `GCROOTS` directory (recursively).
@@ -65,6 +47,29 @@ Not pruned: `log/` (build logs, keyed by `.drv` name), `realisations/`
 debug symbols). Their keys do not map back to a store hash without
 extra parsing, so they accumulate. If you write them, clean them out of
 band or open an issue.
+
+## Standalone pruner
+
+The pruner runs against any binary cache directory; the NixOS modules
+below just wrap it in a systemd timer. Pass `-n` to dry-run first.
+
+```console
+$ mkdir roots && echo /nix/store/abc...-hello > roots/keep
+$ nix run github:Mic92/kiss-cache -- -n /var/cache/nix roots
+```
+
+```
+Usage: kiss-cache [-n|--dry-run] <CACHEDIR> <GCROOTS>...
+
+Arguments:
+  CACHEDIR    Cache directory
+  GCROOTS     Directories of marker files naming store paths to keep
+
+Options:
+  -n, --dry-run  Do not actually delete files
+  -h, --help     Print help
+  -V, --version  Print version
+```
 
 ## NixOS modules
 
