@@ -16,6 +16,7 @@ in
     ./kiss-cache-serve-tor.nix
     ./kiss-cache-update-tor.nix
     ./kiss-cache-publish-tor.nix
+    ./kiss-cache-serve-oidc.nix
   ];
 
   # When serving with writers, their PUT marker files are roots.

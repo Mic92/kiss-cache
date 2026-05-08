@@ -45,6 +45,8 @@ and `PUT`s a marker file — or by hand. See
   marker as a deployment channel and `kiss-cache-update` to switch.
 - [Tor hidden services](docs/tor.md) — serve the cache as Tor v3
   onions with client authorization as the access control.
+- [OIDC bearer tokens](docs/oidc.md) — authenticate CI workflows
+  (GitHub Actions, etc.) without distributing client certificates.
 
 ## Quick start (NixOS)
 

@@ -40,6 +40,7 @@
         kiss-cache-serve-tor = ./nixos/kiss-cache-serve-tor.nix;
         kiss-cache-update-tor = ./nixos/kiss-cache-update-tor.nix;
         kiss-cache-publish-tor = ./nixos/kiss-cache-publish-tor.nix;
+        kiss-cache-serve-oidc = ./nixos/kiss-cache-serve-oidc.nix;
         default = ./nixos/default.nix;
       };
 
@@ -54,6 +55,9 @@
             nixosModule = self.nixosModules.default;
           };
           nixos-tor = pkgs.callPackage ./nixos/test-tor.nix {
+            nixosModule = self.nixosModules.default;
+          };
+          nixos-oidc = pkgs.callPackage ./nixos/test-oidc.nix {
             nixosModule = self.nixosModules.default;
           };
         }
