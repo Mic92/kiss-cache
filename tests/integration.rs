@@ -11,7 +11,7 @@ const HASH_DRV: &str = "cccccccccccccccccccccccccccccccc";
 const HASH_GARBAGE: &str = "dddddddddddddddddddddddddddddddd";
 
 struct Fixture {
-    _tmp: tempfile::TempDir,
+    tmp: tempfile::TempDir,
     cache: PathBuf,
     gcroots: PathBuf,
 }
@@ -24,7 +24,7 @@ impl Fixture {
         fs::create_dir_all(cache.join("nar")).unwrap();
         fs::create_dir_all(&gcroots).unwrap();
         Fixture {
-            _tmp: tmp,
+            tmp,
             cache,
             gcroots,
         }
@@ -148,5 +148,35 @@ fn gcroot_in_nested_dir_is_followed() {
 
     fx.run(false);
     assert!(fx.narinfo_exists(HASH_ROOT));
+    assert!(!fx.narinfo_exists(HASH_GARBAGE));
+}
+
+/// A gcroot directory containing a *relative* symlink to another directory,
+/// which in turn holds the actual store-path symlink. Nix produces such
+/// chains (e.g. profiles/system -> system-1-link). The relative target must
+/// be resolved against the symlink's parent directory, not the process CWD;
+/// otherwise the real root is missed and its archives get deleted.
+#[test]
+fn relative_symlink_in_gcroots_is_resolved() {
+    let fx = Fixture::new();
+    fx.add_narinfo(HASH_ROOT, "root", &[], None);
+    fx.add_narinfo(HASH_GARBAGE, "garbage", &[], None);
+
+    // <tmp>/profiles/result -> /nix/store/<hash>-root
+    let profiles = fx.tmp.path().join("profiles");
+    fs::create_dir_all(&profiles).unwrap();
+    symlink(
+        format!("/nix/store/{HASH_ROOT}-root"),
+        profiles.join("result"),
+    )
+    .unwrap();
+    // <tmp>/gcroots/indirect -> ../profiles  (relative!)
+    symlink("../profiles", fx.gcroots.join("indirect")).unwrap();
+
+    fx.run(false);
+    assert!(
+        fx.narinfo_exists(HASH_ROOT),
+        "root reachable via relative symlink must be kept"
+    );
     assert!(!fx.narinfo_exists(HASH_GARBAGE));
 }
