@@ -9,6 +9,6 @@ homepage = "https://github.com/astro/nix-cache-cut"
 repository = "https://github.com/astro/nix-cache-cut.git"
 
 [dependencies]
-clap = "4"
+lexopt = "0.3"
 walkdir = "2"
 indicatif = "0.18"

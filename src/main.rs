@@ -1,6 +1,5 @@
-use std::{collections::HashSet, fs, path::Path};
+use std::{collections::HashSet, fs, path::Path, process::ExitCode};
 
-use clap::{Arg, ArgAction, Command};
 use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
 use walkdir::WalkDir;
 
@@ -8,29 +7,77 @@ mod binary_cache;
 mod dep_scan;
 mod gcroots;
 
-fn main() {
-    // Define command-line arguments
-    let matches = Command::new("nix-cache-cut")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author("Astro <astro@spaceboyz.net>")
-        .about("Trim Nix binary caches according to GC roots")
-        .arg(
-            Arg::new("DRYRUN")
-                .action(ArgAction::SetTrue)
-                .short('n')
-                .long("dry-run")
-                .help("Do not actually delete files"),
-        )
-        .arg(Arg::new("CACHEDIR").required(true).help("Cache directory"))
-        .arg(
-            Arg::new("GCROOTS")
-                .num_args(1..)
-                .default_value("/nix/var/nix/gcroots")
-                .help("Garbage collector roots"),
-        )
-        .get_matches();
-    let dry_run = matches.get_flag("DRYRUN");
+const USAGE: &str = "\
+Trim Nix binary caches according to GC roots
 
+Usage: nix-cache-cut [-n|--dry-run] <CACHEDIR> [GCROOTS...]
+
+Arguments:
+  CACHEDIR    Cache directory
+  GCROOTS     Garbage collector roots [default: /nix/var/nix/gcroots]
+
+Options:
+  -n, --dry-run  Do not actually delete files
+  -h, --help     Print help
+  -V, --version  Print version";
+
+struct Args {
+    dry_run: bool,
+    cache_dir: String,
+    gcroots: Vec<String>,
+}
+
+fn parse_args() -> Result<Args, lexopt::Error> {
+    use lexopt::prelude::*;
+
+    let mut dry_run = false;
+    let mut positional = Vec::new();
+    let mut parser = lexopt::Parser::from_env();
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Short('n') | Long("dry-run") => dry_run = true,
+            Short('h') | Long("help") => {
+                println!("{USAGE}");
+                std::process::exit(0);
+            }
+            Short('V') | Long("version") => {
+                println!("nix-cache-cut {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            Value(v) => positional.push(v.string()?),
+            _ => return Err(arg.unexpected()),
+        }
+    }
+
+    let mut positional = positional.into_iter();
+    let cache_dir = positional
+        .next()
+        .ok_or("missing required argument CACHEDIR")?;
+    let mut gcroots: Vec<String> = positional.collect();
+    if gcroots.is_empty() {
+        gcroots.push("/nix/var/nix/gcroots".to_owned());
+    }
+
+    Ok(Args {
+        dry_run,
+        cache_dir,
+        gcroots,
+    })
+}
+
+fn main() -> ExitCode {
+    let args = match parse_args() {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("error: {e}\n\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    run(&args);
+    ExitCode::SUCCESS
+}
+
+fn run(args: &Args) {
     let make_spinner = |color| {
         ProgressStyle::with_template(
             &"{spinner} {prefix:.bold.dim} {wide_bar:.COLOR} [{pos:.bold.dim}/{len:.bold}] {msg}"
@@ -51,7 +98,7 @@ fn main() {
     progress_keep.set_prefix("Retaining archives");
     progress_keep.set_style(make_spinner("yellow"));
     progress_keep.tick();
-    let msg_prefix = if dry_run { "NOT " } else { "" };
+    let msg_prefix = if args.dry_run { "NOT " } else { "" };
     let progress_rm_narinfo = progress.add(ProgressBar::new(1));
     progress_rm_narinfo.set_prefix(format!("{msg_prefix}Deleting .narinfo files"));
     progress_rm_narinfo.set_style(make_spinner("red"));
@@ -63,15 +110,14 @@ fn main() {
 
     // Scan garbage-collector roots
     let mut gcroots = gcroots::GcRoots::new();
-    for gcroot in matches.get_many::<String>("GCROOTS").expect("GCROOTS") {
+    for gcroot in &args.gcroots {
         gcroots.enqueue(gcroot);
     }
     let store_paths = gcroots.scan(&progress_gcroots);
     progress_gcroots.finish();
 
     // Construct cache abstraction
-    let mut cache =
-        binary_cache::BinaryCache::new(matches.get_one::<String>("CACHEDIR").expect("CACHEDIR"));
+    let mut cache = binary_cache::BinaryCache::new(&args.cache_dir);
     // Scan gcroots dependencies
     let mut scanner = dep_scan::DependencyScanner::new();
     for path in store_paths {
@@ -109,15 +155,18 @@ fn main() {
         HumanBytes(file_size)
     ));
 
-    let rm_narinfo_size = sweep(&cache_path, &progress_rm_narinfo, dry_run, |path| {
+    let rm_narinfo_size = sweep(&cache_path, &progress_rm_narinfo, args.dry_run, |path| {
         path.extension().is_some_and(|ext| ext == "narinfo") && !keep_infos.contains(path)
     });
     drop(keep_infos);
     progress_rm_narinfo.finish_with_message(format!("{}", HumanBytes(rm_narinfo_size)));
 
-    let rm_nar_size = sweep(&cache_path.join("nar"), &progress_rm_nar, dry_run, |path| {
-        !keep_archives.contains(path)
-    });
+    let rm_nar_size = sweep(
+        &cache_path.join("nar"),
+        &progress_rm_nar,
+        args.dry_run,
+        |path| !keep_archives.contains(path),
+    );
     drop(keep_archives);
     progress_rm_nar.finish_with_message(format!("{}", HumanBytes(rm_nar_size)));
 }
@@ -147,9 +196,7 @@ fn sweep(
             eprintln!("Cannot stat {}", path.display());
         }
 
-        if !dry_run
-            && let Err(e) = fs::remove_file(path)
-        {
+        if !dry_run && let Err(e) = fs::remove_file(path) {
             eprintln!("Cannot remove {}: {}", path.display(), e);
         }
 
