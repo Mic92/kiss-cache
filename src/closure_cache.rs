@@ -30,7 +30,7 @@ pub type Map = FxHashMap<StoreHash, NarInfo>;
 /// disk and is removed when the cache is.
 #[must_use]
 pub fn default_path(cache_dir: &Path) -> PathBuf {
-    cache_dir.join(".nix-cache-cut.closures")
+    cache_dir.join(".kiss-cache.closures")
 }
 
 /// Load the persistent cache. Any parse or I/O error yields an empty map;

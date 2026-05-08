@@ -4,15 +4,15 @@
   ...
 }:
 let
-  cfg = config.services.nix-cache-cut;
+  cfg = config.services.kiss-cache;
 in
 {
-  options.services.nix-cache-cut = {
+  options.services.kiss-cache = {
     enable = lib.mkEnableOption "periodic pruning of a Nix binary cache against GC roots";
 
     package = lib.mkOption {
       type = lib.types.package;
-      description = "The nix-cache-cut package to use.";
+      description = "The kiss-cache package to use.";
     };
 
     cacheDir = lib.mkOption {
@@ -55,7 +55,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    systemd.services.nix-cache-cut = {
+    systemd.services.kiss-cache = {
       description = "Prune Nix binary cache against GC roots";
       # Don't race the Nix daemon's own GC while it may be rewriting roots.
       after = [ "nix-gc.service" ];
@@ -78,7 +78,7 @@ in
       };
     };
 
-    systemd.timers.nix-cache-cut = {
+    systemd.timers.kiss-cache = {
       description = "Periodically prune Nix binary cache";
       wantedBy = [ "timers.target" ];
       timerConfig = {

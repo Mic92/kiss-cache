@@ -1,12 +1,12 @@
 [package]
-name = "nix-cache-cut"
+name = "kiss-cache"
 description = "Trim Nix binary caches according to GC roots"
 version = "1.0.0"
 authors = ["Astro <astro@spaceboyz.net>"]
 edition = "2024"
 license = "MIT"
-homepage = "https://github.com/astro/nix-cache-cut"
-repository = "https://github.com/astro/nix-cache-cut.git"
+homepage = "https://github.com/Mic92/kiss-cache"
+repository = "https://github.com/Mic92/kiss-cache.git"
 
 [dependencies]
 lexopt = "0.3"

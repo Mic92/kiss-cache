@@ -11,10 +11,10 @@
   ...
 }:
 let
-  cfg = config.services.nix-cache-serve;
+  cfg = config.services.kiss-cache-serve;
 in
 {
-  options.services.nix-cache-serve = {
+  options.services.kiss-cache-serve = {
     enable = lib.mkEnableOption "serving a Nix binary cache over HTTPS with mutual TLS";
 
     cacheDir = lib.mkOption {

@@ -5,7 +5,7 @@ use std::{fmt::Write as _, fs, hint::black_box, os::unix::fs::symlink};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use indicatif::ProgressBar;
-use nix_cache_cut::{
+use kiss_cache::{
     binary_cache::BinaryCache,
     closure_cache,
     dep_scan::DependencyScanner,

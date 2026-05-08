@@ -1,12 +1,12 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use nix_cache_cut::prune::{self, Config, Progress};
+use kiss_cache::prune::{self, Config, Progress};
 
 const USAGE: &str = "\
 Trim Nix binary caches according to GC roots
 
-Usage: nix-cache-cut [-n|--dry-run] <CACHEDIR> [GCROOTS...]
+Usage: kiss-cache [-n|--dry-run] <CACHEDIR> [GCROOTS...]
 
 Arguments:
   CACHEDIR    Cache directory
@@ -31,7 +31,7 @@ fn parse_args() -> Result<Config, lexopt::Error> {
                 std::process::exit(0);
             }
             Short('V') | Long("version") => {
-                println!("nix-cache-cut {}", env!("CARGO_PKG_VERSION"));
+                println!("kiss-cache {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             Value(v) => positional.push(v.into()),

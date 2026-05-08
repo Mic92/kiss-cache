@@ -1,4 +1,4 @@
-# nix-cache-cut
+# kiss-cache
 
 Yet another garbage collector for Nix binary caches.
 
@@ -10,10 +10,10 @@ cache-gc](https://github.com/lheckemann/cache-gc).
 ## Usage
 
 ```console
-$ nix run github:astro/nix-cache-cut -- --help
+$ nix run github:Mic92/kiss-cache -- --help
 Trim Nix binary caches according to GC roots
 
-Usage: nix-cache-cut [-n|--dry-run] <CACHEDIR> [GCROOTS...]
+Usage: kiss-cache [-n|--dry-run] <CACHEDIR> [GCROOTS...]
 
 Arguments:
   CACHEDIR    Cache directory
@@ -40,7 +40,7 @@ also treated as roots, so processes that cannot create symlinks (e.g.
 remote builders pushing via HTTP `PUT`) can register roots by uploading
 an empty marker file.
 
-A persistent metadata cache at `<CACHEDIR>/.nix-cache-cut.closures`
+A persistent metadata cache at `<CACHEDIR>/.kiss-cache.closures`
 speeds up repeated runs by skipping the parse of unchanged `.narinfo`
 files. It is written after every non-dry-run pass and is safe to delete.
 
@@ -49,21 +49,21 @@ files. It is written after every non-dry-run pass and is safe to delete.
 The flake ships two NixOS modules and a `default` module that wires them
 together:
 
-- **`services.nix-cache-cut`** — runs the pruner on a systemd timer.
-- **`services.nix-cache-serve`** — serves the cache over HTTPS with
+- **`services.kiss-cache`** — runs the pruner on a systemd timer.
+- **`services.kiss-cache-serve`** — serves the cache over HTTPS with
   mutual TLS via nginx, with optional WebDAV `PUT` for trusted writers.
 
 ```nix
 {
-  inputs.nix-cache-cut.url = "github:astro/nix-cache-cut";
+  inputs.kiss-cache.url = "github:Mic92/kiss-cache";
 
-  outputs = { self, nixpkgs, nix-cache-cut }: {
+  outputs = { self, nixpkgs, kiss-cache }: {
     nixosConfigurations.cache = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        nix-cache-cut.nixosModules.default
+        kiss-cache.nixosModules.default
         {
-          services.nix-cache-serve = {
+          services.kiss-cache-serve = {
             enable = true;
             cacheDir = "/var/lib/nix-cache";
             hostName = "cache.example.org";
@@ -72,7 +72,7 @@ together:
             clientCA = "/etc/ssl/clients-ca.pem";
             writers = [ "CN=hydra" ];
           };
-          services.nix-cache-cut = {
+          services.kiss-cache = {
             enable = true;
             cacheDir = "/var/lib/nix-cache";
             schedule = "daily";

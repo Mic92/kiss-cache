@@ -16,7 +16,7 @@
       mkPackage =
         pkgs:
         pkgs.rustPlatform.buildRustPackage {
-          pname = "nix-cache-cut";
+          pname = "kiss-cache";
           version = (lib.importTOML ./Cargo.toml).package.version;
           src = lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
@@ -33,14 +33,14 @@
           meta = {
             description = "Trim Nix binary caches according to GC roots";
             license = lib.licenses.mit;
-            mainProgram = "nix-cache-cut";
+            mainProgram = "kiss-cache";
           };
         };
     in
     {
       packages = eachSystem (pkgs: rec {
-        nix-cache-cut = mkPackage pkgs;
-        default = nix-cache-cut;
+        kiss-cache = mkPackage pkgs;
+        default = kiss-cache;
       });
 
       devShells = eachSystem (pkgs: {
@@ -57,19 +57,19 @@
       });
 
       nixosModules = {
-        nix-cache-cut = ./nixos/nix-cache-cut.nix;
-        nix-cache-serve = ./nixos/nix-cache-serve.nix;
+        kiss-cache = ./nixos/kiss-cache.nix;
+        kiss-cache-serve = ./nixos/kiss-cache-serve.nix;
         default =
           { config, pkgs, ... }:
           let
-            serve = config.services.nix-cache-serve;
+            serve = config.services.kiss-cache-serve;
           in
           {
             imports = [
-              ./nixos/nix-cache-cut.nix
-              ./nixos/nix-cache-serve.nix
+              ./nixos/kiss-cache.nix
+              ./nixos/kiss-cache-serve.nix
             ];
-            services.nix-cache-cut = {
+            services.kiss-cache = {
               package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
               # When serving with writers, their PUT marker files are roots.
               gcRoots = lib.mkIf (serve.enable && serve.writers != [ ]) [ "${serve.cacheDir}/gcroots" ];
@@ -90,7 +90,7 @@
       );
 
       hydraJobs = {
-        nix-cache-cut = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
+        kiss-cache = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (
           system: lib.hydraJob self.packages.${system}.default
         );
         tests = lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (

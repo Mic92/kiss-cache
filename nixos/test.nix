@@ -47,7 +47,7 @@ let
   publicKey = "cache:EkFXxh3upwnPjUXg41d0HRWDzBoseBTINPiv0zNQd2g=";
 in
 testers.runNixOSTest {
-  name = "nix-cache-cut";
+  name = "kiss-cache";
 
   nodes.cache =
     { lib, ... }:
@@ -69,7 +69,7 @@ testers.runNixOSTest {
 
       environment.etc."nix/secret-key".text = signingKey;
 
-      services.nix-cache-serve = {
+      services.kiss-cache-serve = {
         enable = true;
         cacheDir = "/var/lib/nix-cache";
         hostName = "cache";
@@ -79,7 +79,7 @@ testers.runNixOSTest {
         writers = [ "CN=writer" ];
       };
 
-      services.nix-cache-cut = {
+      services.kiss-cache = {
         enable = true;
         cacheDir = "/var/lib/nix-cache";
         gcRoots = [ "/var/lib/nix-cache-roots" ];
@@ -161,7 +161,7 @@ testers.runNixOSTest {
         )
         cache.succeed(f"echo x > /var/lib/nix-cache/nar/{garbage}.nar.xz")
 
-        cache.succeed("systemctl start nix-cache-cut.service")
+        cache.succeed("systemctl start kiss-cache.service")
 
         cache.fail(f"test -e /var/lib/nix-cache/{garbage}.narinfo")
         cache.fail(f"test -e /var/lib/nix-cache/nar/{garbage}.nar.xz")
@@ -194,7 +194,7 @@ testers.runNixOSTest {
         )
         cache.succeed(f"test -e /var/lib/nix-cache/gcroots/{marker}")
 
-        cache.succeed("systemctl start nix-cache-cut.service")
+        cache.succeed("systemctl start kiss-cache.service")
         # The pushed closure is reachable via the marker; still fetchable.
         importer.succeed(f"nix-store --delete {push} || true")
         importer.succeed(f"nix copy --no-check-sigs --from '{store}' {push}")

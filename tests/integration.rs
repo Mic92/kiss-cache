@@ -72,7 +72,7 @@ impl Fixture {
     }
 
     fn run(&self, dry_run: bool) {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_nix-cache-cut"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_kiss-cache"));
         if dry_run {
             cmd.arg("-n");
         }
