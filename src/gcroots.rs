@@ -84,6 +84,10 @@ impl GcRoots {
             return;
         };
         for entry in entries.flatten() {
+            // Dotfiles (`.lock/`, editor temp files) are not markers.
+            if entry.file_name().as_encoded_bytes().starts_with(b".") {
+                continue;
+            }
             self.enqueue(entry.path());
         }
     }

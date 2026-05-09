@@ -8,6 +8,7 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 let
@@ -130,6 +131,7 @@ in
   config = lib.mkIf cfg.enable {
     services.nginx = {
       enable = true;
+      additionalModules = lib.mkIf (cfg.writers != [ ]) [ pkgs.nginxModules.njs ];
       # ssl_client_s_dn is only available in `if`/`map`, so the writer ACL is
       # implemented as a map from DN to a boolean and checked per request.
       appendHttpConfig = lib.mkIf (cfg.writers != [ ]) ''
@@ -137,6 +139,8 @@ in
           default 0;
           ${lib.concatMapStringsSep "\n  " (dn: "\"${dn}\" 1;") cfg.writers}
         }
+        js_import kiss_cache_lock from ${./lock-guard.js};
+        js_set $kiss_cache_prune_locked kiss_cache_lock.pruneLockHeld;
       '';
       virtualHosts.${cfg.hostName} = {
         forceSSL = true;
@@ -145,6 +149,9 @@ in
         extraConfig = ''
           ssl_client_certificate ${cfg.clientCA};
           ssl_verify_client on;
+        ''
+        + lib.optionalString (cfg.writers != [ ]) ''
+          set $kiss_cache_lock_dir ${cfg.cacheDir}/gcroots/.lock;
         '';
         locations = {
           "/".extraConfig = ''
@@ -234,6 +241,28 @@ in
               add_header Cache-Control no-store;
             '';
           };
+          # Cooperative lock files. PUT is refused while the pruner
+          # holds a fresh lock, so a writer's lock landing implies the
+          # prune already finished and `nix copy` snapshots a
+          # post-prune cache. DELETE is never refused so a writer can
+          # always release its lock. See lock-guard.js.
+          "/gcroots/.lock/" = lib.mkIf (cfg.writers != [ ]) {
+            extraConfig = ''
+              if ($nix_cache_writer != 1) {
+                return 403;
+              }
+              if ($kiss_cache_prune_locked) {
+                return 503 "cache is being pruned, retry later\n";
+              }
+              dav_methods PUT DELETE;
+              create_full_put_path on;
+              dav_access user:rw group:r all:r;
+              client_body_temp_path ${cfg.cacheDir}/.tmp;
+              client_max_body_size 1k;
+              expires off;
+              add_header Cache-Control no-store;
+            '';
+          };
         };
       };
     };
@@ -242,14 +271,24 @@ in
       [
         "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
       ]
-      ++ lib.optional (cfg.writers != [ ]) (
+      ++ lib.optionals (cfg.writers != [ ]) (
         let
           # Age by mtime only: writers refresh markers with PUT, which updates
           # mtime. The default age-by also checks ctime, which a backup restore
           # or rsync resets, accidentally extending a marker's lifetime.
           age = if cfg.gcRootMaxAge == null then "-" else "m:${cfg.gcRootMaxAge}";
+          dir = "d ${cfg.cacheDir}/gcroots";
+          owner = "${config.services.nginx.user} ${config.services.nginx.group}";
         in
-        "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} ${age}"
+        [
+          "${dir} 0755 ${owner} ${age}"
+          # Lock files coordinate writers and the pruner. Both refresh
+          # them while running and remove them on completion; anything
+          # older than an hour belongs to a crashed holder. tmpfiles is
+          # the safety net for crashes; the pruner already ignores
+          # stale locks (>30m) without help.
+          "${dir}/.lock 0755 ${owner} m:1h"
+        ]
       )
     );
 

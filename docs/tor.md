@@ -69,7 +69,9 @@ services.kiss-cache-publish-tor = {
 };
 ```
 
-For manual `nix copy` and `curl` over Tor, set
+For manual publishes over Tor, set
 `ALL_PROXY=socks5h://127.0.0.1:9050` after configuring
-`services.tor.client.onionServices.<write-onion>.clientAuthorizations`.
+`services.tor.client.onionServices.<write-onion>.clientAuthorizations`,
+then use `kiss-cache with-lock` as in any other publish; both `curl`
+and `nix copy` honour the proxy.
 

@@ -154,6 +154,8 @@ in
       # an explicit resolver: nginx does not consult /etc/resolv.conf.
       appendHttpConfig = ''
         js_import kiss_cache_oidc from ${./oidc-auth.js};
+        js_import kiss_cache_lock from ${./lock-guard.js};
+        js_set $kiss_cache_prune_locked kiss_cache_lock.pruneLockHeld;
       ''
       + lib.optionalString (cfg.resolvers != [ ]) ''
         resolver ${lib.concatStringsSep " " cfg.resolvers} valid=300s;
@@ -171,6 +173,7 @@ in
           set $oidc_audience "${cfg.audience}";
           set $oidc_read_subjects '${builtins.toJSON cfg.readSubjects}';
           set $oidc_write_subjects '${builtins.toJSON cfg.writeSubjects}';
+          set $kiss_cache_lock_dir ${cfg.cacheDir}/gcroots/.lock;
           location = /__kiss_cache_oidc_auth {
             internal;
             js_content kiss_cache_oidc.auth;
@@ -209,6 +212,19 @@ in
             expires off;
             add_header Cache-Control no-store;
           '';
+          # Lock PUTs are refused while the pruner is running.
+          # See lock-guard.js and kiss-cache-serve.nix.
+          "/gcroots/.lock/".extraConfig = ''
+            auth_request /__kiss_cache_oidc_auth;
+            if ($kiss_cache_prune_locked) {
+              return 503 "cache is being pruned, retry later\n";
+            }
+            dav_methods PUT DELETE;
+            ${davCommon}
+            client_max_body_size 1k;
+            expires off;
+            add_header Cache-Control no-store;
+          '';
         };
       };
     };
@@ -217,6 +233,7 @@ in
     systemd.tmpfiles.rules = [
       "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
       "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} -"
+      "d ${cfg.cacheDir}/gcroots/.lock 0755 ${config.services.nginx.user} ${config.services.nginx.group} m:1h"
     ];
 
     services.kiss-cache.gcRoots = lib.mkIf config.services.kiss-cache.enable [

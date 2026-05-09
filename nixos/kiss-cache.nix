@@ -54,6 +54,17 @@ in
         Useful for validating GC root coverage before enabling pruning.
       '';
     };
+
+    lockWait = lib.mkOption {
+      type = lib.types.int;
+      default = 600;
+      description = ''
+        Seconds to wait for in-flight uploads to drain before pruning.
+        Writers take a cooperative lock in `gcroots/.lock/`; the
+        pruner waits until none is fresh. After this budget the run
+        fails (and the timer retries on its next trigger).
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -64,13 +75,20 @@ in
       serviceConfig = {
         Type = "oneshot";
         ExecStart = lib.escapeShellArgs (
-          [ (lib.getExe cfg.package) ]
+          [
+            (lib.getExe cfg.package)
+            "prune"
+          ]
           ++ lib.optional cfg.dryRun "--dry-run"
+          ++ [
+            "--lock-wait"
+            (toString cfg.lockWait)
+          ]
           ++ [ cfg.cacheDir ]
           ++ cfg.gcRoots
         );
-        # Pruning never needs to write outside the cache directory.
-        ReadWritePaths = [ cfg.cacheDir ];
+        # Writes the lock file under gcroots/, deletes from cacheDir.
+        ReadWritePaths = [ cfg.cacheDir ] ++ cfg.gcRoots;
         ProtectSystem = "strict";
         ProtectHome = true;
         PrivateTmp = true;

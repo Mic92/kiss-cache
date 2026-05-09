@@ -8,8 +8,13 @@ them together:
   TLS via nginx, with optional WebDAV `PUT` for trusted writers.
 - `services.kiss-cache-update` polls a gcroot marker and switches the
   system to the closure it names; see [deployment.md](deployment.md).
-- `services.kiss-cache-serve-tor` and `services.kiss-cache-update-tor`
-  route everything over Tor; see [tor.md](tor.md).
+- `services.kiss-cache-publish` rebuilds NixOS systems on a timer and
+  pushes them to the cache; see [deployment.md](deployment.md).
+- `services.kiss-cache-serve-tor`, `services.kiss-cache-update-tor`
+  and `services.kiss-cache-publish-tor` route everything over Tor;
+  see [tor.md](tor.md).
+- `services.kiss-cache-serve-oidc` authenticates clients with OIDC
+  bearer tokens instead of mTLS; see [oidc.md](oidc.md).
 
 See the [README quick start](../README.md#quick-start-nixos) for the
 flake skeleton.
@@ -28,12 +33,15 @@ local cache, and compresses nearly as well.
 
 ```console
 $ store='https://cache.example.org?compression=zstd&secret-key=/etc/nix/cache-key&tls-certificate=writer.pem&tls-private-key=writer.key'
-$ nix copy --to "$store" /nix/store/abc...-hello
-$ echo /nix/store/abc...-hello | curl --cert writer.pem --key writer.key \
-    -X PUT --data-binary @- "https://cache.example.org/gcroots/my-job"
+$ nix run github:Mic92/kiss-cache -- with-lock \
+    https://cache.example.org/gcroots/my-job /nix/store/abc...-hello \
+    --cert writer.pem --key writer.key --cacert ca.pem -- \
+    nix copy --to "$store" /nix/store/abc...-hello
 ```
 
 Without the marker, the pushed closure is deleted on the next prune.
+The wrapper takes a cooperative lock against the pruner before
+pushing; see [pruner.md](pruner.md#concurrent-writes).
 
 Set `gcRootMaxAge` to expire stale markers automatically. Writers must
 re-`PUT` on each push to keep their closures alive:

@@ -35,8 +35,9 @@ and `PUT`s a marker file — or by hand. See
 
 ## Documentation
 
-- [Pruner](docs/pruner.md) — what gets deleted, what gets kept, and
-  how to run `kiss-cache` standalone.
+- [Pruner](docs/pruner.md) — what gets deleted, what gets kept, how
+  the pruner coordinates with concurrent uploads, and how to run
+  `kiss-cache` standalone.
 - [NixOS modules](docs/nixos-modules.md) — pruner timer, nginx + mTLS
   serving, signing, importing without flakes.
 - [Mutual TLS setup](docs/mtls.md) — CA, server and client

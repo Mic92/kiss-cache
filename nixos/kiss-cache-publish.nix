@@ -15,16 +15,23 @@ let
   cfg = config.services.kiss-cache-publish;
   local = cfg.cacheDir != null;
 
-  # `?` parameters for `nix copy --to`, and curl flags for the marker
-  # PUT. Derived from the same options so they cannot disagree.
+  # `?` parameters for `nix copy --to` and curl flags for the lock
+  # and marker writes. Derived from the same options so they cannot
+  # disagree.
   storeTls = lib.optionalString (
     cfg.tlsCertificate != null
   ) "&tls-certificate=${cfg.tlsCertificate}&tls-private-key=${cfg.tlsPrivateKey}";
   curlTls =
-    lib.optionalString (
-      cfg.tlsCertificate != null
-    ) " --cert ${cfg.tlsCertificate} --key ${cfg.tlsPrivateKey}"
-    + lib.optionalString (cfg.tlsCACertificate != null) " --cacert ${cfg.tlsCACertificate}";
+    lib.optional (cfg.tlsCertificate != null) [
+      "--cert"
+      cfg.tlsCertificate
+      "--key"
+      cfg.tlsPrivateKey
+    ]
+    ++ lib.optional (cfg.tlsCACertificate != null) [
+      "--cacert"
+      cfg.tlsCACertificate
+    ];
   storeOpts = lib.optionalString (
     cfg.tlsCACertificate != null
   ) " --option ssl-cert-file ${cfg.tlsCACertificate}";
@@ -36,33 +43,21 @@ let
     else
       "${cfg.cacheUrl}?compression=zstd${signOpt}${storeTls}";
 
-  # When the cache directory is local (publish colocated with serve),
-  # write the marker file directly instead of round-tripping through
-  # nginx. nix copy writes file:// stores atomically.
-  publishOne =
+  marker =
     sys:
-    if local then
-      ''
-        echo "$out" > ${lib.escapeShellArg "${cfg.cacheDir}/gcroots/${sys.marker}"}.tmp
-        mv ${lib.escapeShellArg "${cfg.cacheDir}/gcroots/${sys.marker}"}.tmp \
-           ${lib.escapeShellArg "${cfg.cacheDir}/gcroots/${sys.marker}"}
-      ''
-    else
-      ''
-        echo "$out" | curl --fail --silent --show-error${curlTls} \
-          -X PUT --data-binary @- \
-          ${lib.escapeShellArg "${cfg.cacheUrl}/gcroots/${sys.marker}"}
-      '';
+    if local then "${cfg.cacheDir}/gcroots/${sys.marker}" else "${cfg.cacheUrl}/gcroots/${sys.marker}";
 
   # CLI: `kiss-cache-publish [MARKER...]`. No arguments publishes
-  # everything; marker names publish only those.
+  # everything; marker names publish only those. The push step runs
+  # under `kiss-cache with-lock`, which takes a cooperative lock
+  # against the pruner; see docs/pruner.md and spec/prune.als.
   publishScript = pkgs.writeShellApplication {
     name = "kiss-cache-publish";
     runtimeInputs = [
       config.nix.package
       pkgs.coreutils
-    ]
-    ++ lib.optional (!local) pkgs.curl;
+      cfg.package
+    ];
     text = ''
       all=(${lib.escapeShellArgs (map (s: s.marker) cfg.systems)})
       if [[ $# -eq 0 ]]; then
@@ -90,21 +85,29 @@ let
           if out=$(nix build --no-link --print-out-paths${storeOpts} \
               ${lib.escapeShellArg sys.flakeRef}); then
             echo "pushing $out" >&2
-            nix copy${storeOpts} --to ${lib.escapeShellArg store} "$out"
-            ${publishOne sys}
+            kiss-cache with-lock ${lib.escapeShellArg (marker sys)} "$out" \
+              ${lib.escapeShellArgs (lib.flatten curlTls)} -- \
+              nix copy${storeOpts} --to ${lib.escapeShellArg store} "$out"
           else
             echo "build failed: ${sys.flakeRef}" >&2
             fail=1
           fi
         fi
       '') cfg.systems}
-      exit $fail
+      exit "$fail"
     '';
   };
 in
 {
   options.services.kiss-cache-publish = {
     enable = lib.mkEnableOption "rebuilding and publishing NixOS systems to a kiss-cache";
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.callPackage ../package.nix { };
+      defaultText = lib.literalExpression "pkgs.callPackage ../package.nix { }";
+      description = "The kiss-cache package providing `kiss-cache with-lock`.";
+    };
 
     cacheUrl = lib.mkOption {
       type = lib.types.nullOr lib.types.str;

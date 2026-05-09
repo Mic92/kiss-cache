@@ -52,13 +52,27 @@ jobs:
             core.setSecret(t);
             core.setOutput("token", t);
       - run: |
+          # Build first so the upload starts with a fresh token.
           system=$(nix build --no-link --print-out-paths .#...toplevel)
-          nix copy --to "https://cache.example.org" "$system" \
-            --option access-tokens "cache.example.org=${{ steps.token.outputs.token }}"
-          echo "$system" | curl --fail -X PUT --data-binary @- \
-            -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
-            https://cache.example.org/gcroots/web1
+          nix run github:Mic92/kiss-cache -- with-lock \
+            --bearer "${{ steps.token.outputs.token }}" \
+            https://cache.example.org/gcroots/web1 "$system" -- \
+            nix copy --to "https://cache.example.org" "$system" \
+              --option access-tokens "cache.example.org=${{ steps.token.outputs.token }}"
 ```
+
+The wrapper takes a cooperative lock against the pruner before
+pushing; see [pruner.md](pruner.md#concurrent-writes). `--bearer`
+adds the `Authorization` header to the lock and marker requests and
+exports the token to the wrapped command as `$KISS_CACHE_TOKEN`.
+
+> **Token lifetime.** GitHub Actions ID tokens expire 5 minutes
+> after they are minted, and neither nix nor kiss-cache can refresh
+> a token mid-`nix copy`. Keep the publish small (push the system
+> closure, not your whole CI store), and build first so the token
+> is only minted right before the upload. If you regularly exceed
+> 5 minutes, use the mTLS vhost instead — client certificates do
+> not expire on a request timescale.
 
 Set `audience` to the cache's URL so a token minted for one service
 cannot be replayed against another.

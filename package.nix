@@ -2,6 +2,8 @@
   lib,
   rustPlatform,
   clippy,
+  curl,
+  makeWrapper,
 }:
 rustPlatform.buildRustPackage {
   pname = "kiss-cache";
@@ -19,7 +21,12 @@ rustPlatform.buildRustPackage {
     ];
   };
   cargoLock.lockFile = ./Cargo.lock;
+  nativeBuildInputs = [ makeWrapper ];
   nativeCheckInputs = [ clippy ];
+  # `kiss-cache with-lock` shells out to curl for HTTP markers.
+  postInstall = ''
+    wrapProgram $out/bin/kiss-cache --suffix PATH : ${lib.makeBinPath [ curl ]}
+  '';
   # Build only the kiss-cache package: the benches workspace member pulls
   # in criterion, which is only useful interactively.
   cargoBuildFlags = [

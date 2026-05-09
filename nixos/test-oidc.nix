@@ -23,7 +23,7 @@ let
 
   snakeCert = runCommand "snake-cert" { nativeBuildInputs = [ openssl ]; } ''
     mkdir -p $out
-    openssl req -x509 -newkey ed25519 -nodes -days 1 -subj /CN=cache.test \
+    openssl req -x509 -newkey ed25519 -nodes -days 36500 -subj /CN=cache.test \
       -keyout $out/key -out $out/cert
   '';
 in
@@ -124,5 +124,27 @@ testers.runNixOSTest {
         ).strip()
         assert rc.startswith("2"), rc
         cache.fail("test -e /var/lib/nix-cache/gcroots/x")
+
+    with subtest("lock PUT is refused while a prune lock is held"):
+        t = jwt("repo:example/infra:ref:refs/heads/main")
+        cache.succeed("echo exclusive > /var/lib/nix-cache/gcroots/.lock/prune-test")
+        rc = cache.succeed(
+            f"{base}/gcroots/.lock/ci-job -H 'Authorization: Bearer {t}' "
+            "-X PUT --data shared"
+        ).strip()
+        assert rc == "503", rc
+        # DELETE is never refused so a writer can always release.
+        rc = cache.succeed(
+            f"{base}/gcroots/.lock/ci-job -H 'Authorization: Bearer {t}' -X DELETE"
+        ).strip()
+        assert rc != "503", rc
+        # Stale prune lock no longer blocks.
+        cache.succeed("touch -d '1 hour ago' /var/lib/nix-cache/gcroots/.lock/prune-test")
+        rc = cache.succeed(
+            f"{base}/gcroots/.lock/ci-job -H 'Authorization: Bearer {t}' "
+            "-X PUT --data shared"
+        ).strip()
+        assert rc.startswith("2"), rc
+        cache.succeed("rm /var/lib/nix-cache/gcroots/.lock/prune-test /var/lib/nix-cache/gcroots/.lock/ci-job")
   '';
 }

@@ -23,8 +23,10 @@ fn narinfo_name(hash: StoreHash) -> OsString {
     s
 }
 
+use std::time::Duration;
+
 use crate::{
-    binary_cache, closure_cache, dep_scan, gcroots, progress::Phase, store_hash::StoreHash,
+    binary_cache, closure_cache, dep_scan, gcroots, lock, progress::Phase, store_hash::StoreHash,
 };
 
 /// Inputs to a pruning run.
@@ -32,6 +34,10 @@ pub struct Config {
     pub dry_run: bool,
     pub cache_dir: PathBuf,
     pub gcroots: Vec<PathBuf>,
+    /// How long to wait for in-flight uploads to finish. The pruner
+    /// polls the lock directory until no fresh shared lock remains;
+    /// after the budget it gives up and the run fails.
+    pub lock_wait: Duration,
 }
 
 /// Progress reporters for each phase. Pass [`Progress::hidden`] for headless
@@ -78,7 +84,35 @@ impl Progress {
 
 /// Run a full prune: scan GC roots, walk the closure, delete unreachable
 /// narinfo and nar files. Honors `config.dry_run`.
-pub fn run(config: &Config, progress: &Progress) {
+///
+/// A non-dry run takes an exclusive lock in every gcroot directory's
+/// `.lock/` subdirectory so it does not race a writer publishing into
+/// the cache. The lock protocol is documented in [`crate::lock`].
+///
+/// # Errors
+///
+/// Returns an error if the lock cannot be acquired (in-flight uploads
+/// did not drain within `config.lock_wait`).
+pub fn run(config: &Config, progress: &Progress) -> Result<(), lock::LockError> {
+    // Acquire all locks before scanning anything: a writer that takes
+    // its shared lock after the gcroots scan could publish a marker
+    // that the scan missed. Holding the lock through the scan and the
+    // sweep makes both consistent. Dedup by canonical path: the same
+    // gcroots directory listed twice would otherwise see its own first
+    // lock as a competitor and self-deadlock.
+    let _locks: Vec<lock::ExclusiveLock> = if config.dry_run {
+        Vec::new()
+    } else {
+        config
+            .gcroots
+            .iter()
+            .map(|d| fs::canonicalize(d).unwrap_or_else(|_| d.clone()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|d| lock::acquire_exclusive(&d, config.lock_wait, Duration::from_secs(5)))
+            .collect::<Result<_, _>>()?
+    };
+
     let mut gcroots = gcroots::GcRoots::new();
     for gcroot in &config.gcroots {
         gcroots.enqueue(gcroot);
@@ -153,6 +187,7 @@ pub fn run(config: &Config, progress: &Progress) {
     );
     drop(keep_archives);
     progress.rm_nar.finish();
+    Ok(())
 }
 
 /// Walk `dir` (one level deep) and delete every entry for which
