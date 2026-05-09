@@ -7,6 +7,11 @@ key can resolve the address. The .onion transport is end-to-end
 encrypted, so nginx serves plain HTTP on Unix sockets that only Tor
 can reach.
 
+Tor only replaces transport authentication. Store-path signing
+works unchanged: writers still pass `secret-key=...` and readers
+still set `trusted-public-keys`; see [quickstart.md
+step 2](quickstart.md#2-generate-a-signing-key).
+
 Each client holds an x25519 keypair: the **public** key goes in the
 server's `readClients`/`writeClients`, the **private** key stays on
 the client for Tor to decrypt the descriptor with. Generate one per

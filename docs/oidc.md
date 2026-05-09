@@ -9,6 +9,11 @@ request through.
 `Authorization` is a header, so this is mutually exclusive with mTLS;
 use one or the other per virtual host.
 
+OIDC only replaces transport authentication. Store-path signing
+works unchanged: writers still pass `secret-key=...` and readers
+still set `trusted-public-keys`; see [quickstart.md
+step 2](quickstart.md#2-generate-a-signing-key).
+
 ## Cache server
 
 ```nix
