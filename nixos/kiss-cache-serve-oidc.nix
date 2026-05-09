@@ -21,7 +21,7 @@
   ...
 }:
 let
-  cfg = config.services.kiss-cache-serve-oidc;
+  cfg = config.services.kiss-cache.serve-oidc;
 
   davCommon = ''
     create_full_put_path on;
@@ -30,13 +30,13 @@ let
   '';
 in
 {
-  options.services.kiss-cache-serve-oidc = {
+  options.services.kiss-cache.serve-oidc = {
     enable = lib.mkEnableOption "serving a Nix binary cache with OIDC bearer-token authentication";
 
     cacheDir = lib.mkOption {
       type = lib.types.path;
       example = "/var/lib/nix-cache";
-      description = "Binary cache directory to serve. See `services.kiss-cache-serve.cacheDir`.";
+      description = "Binary cache directory to serve. See `services.kiss-cache.serve.cacheDir`.";
     };
 
     hostName = lib.mkOption {
@@ -130,11 +130,11 @@ in
     assertions = [
       {
         assertion = cfg.readSubjects != [ ];
-        message = "services.kiss-cache-serve-oidc.readSubjects must not be empty";
+        message = "services.kiss-cache.serve-oidc.readSubjects must not be empty";
       }
       {
         assertion = cfg.writeSubjects != [ ];
-        message = "services.kiss-cache-serve-oidc.writeSubjects must not be empty";
+        message = "services.kiss-cache.serve-oidc.writeSubjects must not be empty";
       }
       {
         # nginx resolves jwksUrl at request time; without a resolver
@@ -143,7 +143,7 @@ in
         assertion =
           cfg.resolvers != [ ]
           || builtins.match "https?://[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+([:/].*)?" cfg.jwksUrl != null;
-        message = "services.kiss-cache-serve-oidc.resolvers must not be empty when jwksUrl is not a literal IP";
+        message = "services.kiss-cache.serve-oidc.resolvers must not be empty when jwksUrl is not a literal IP";
       }
     ];
 

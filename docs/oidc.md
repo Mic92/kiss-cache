@@ -1,6 +1,6 @@
 # OIDC bearer-token authentication
 
-`kiss-cache-serve-oidc` lets CI systems that issue short-lived OIDC
+`services.kiss-cache.serve-oidc` lets CI systems that issue short-lived OIDC
 tokens — most commonly GitHub Actions — push to the cache without
 holding a long-lived client certificate. nginx validates the JWT
 against the issuer's JWKS in an embedded njs module before letting the
@@ -12,7 +12,7 @@ use one or the other per virtual host.
 ## Cache server
 
 ```nix
-services.kiss-cache-serve-oidc = {
+services.kiss-cache.serve-oidc = {
   enable = true;
   cacheDir = "/var/lib/nix-cache";
   hostName = "cache.example.org";

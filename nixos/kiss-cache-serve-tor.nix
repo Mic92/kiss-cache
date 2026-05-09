@@ -22,7 +22,7 @@
   ...
 }:
 let
-  cfg = config.services.kiss-cache-serve-tor;
+  cfg = config.services.kiss-cache.serve-tor;
 
   # Unix sockets so nginx never exposes a loopback port: only tor (via
   # BindPaths into its own RootDirectory) and nginx can connect. The
@@ -39,13 +39,13 @@ let
   '';
 in
 {
-  options.services.kiss-cache-serve-tor = {
+  options.services.kiss-cache.serve-tor = {
     enable = lib.mkEnableOption "serving a Nix binary cache over Tor hidden services";
 
     cacheDir = lib.mkOption {
       type = lib.types.path;
       example = "/var/lib/nix-cache";
-      description = "Binary cache directory to serve. See `services.kiss-cache-serve.cacheDir`.";
+      description = "Binary cache directory to serve. See `services.kiss-cache.serve.cacheDir`.";
     };
 
     priority = lib.mkOption {
@@ -65,7 +65,7 @@ in
       description = ''
         Clients authorized to read. One `descriptor:x25519:<base32>`
         public key per client; the matching private key goes on the
-        client's machine (see `services.kiss-cache-update-tor`). Empty
+        client's machine (see `services.kiss-cache.update-tor`). Empty
         list disables client authorization for the read onion: anyone
         who learns the address can read.
       '';
@@ -88,7 +88,7 @@ in
     assertions = [
       {
         assertion = cfg.writeClients != [ ];
-        message = "services.kiss-cache-serve-tor.writeClients must not be empty";
+        message = "services.kiss-cache.serve-tor.writeClients must not be empty";
       }
     ];
 

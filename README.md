@@ -61,7 +61,7 @@ and `PUT`s a marker file — or by hand. See
       modules = [
         kiss-cache.nixosModules.default
         {
-          services.kiss-cache-serve = {
+          services.kiss-cache.serve = {
             enable = true;
             cacheDir = "/var/lib/nix-cache";
             hostName = "cache.example.org";

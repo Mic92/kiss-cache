@@ -24,7 +24,7 @@ Cache server: list every client's public key under the onion(s) it
 may reach. A writer needs both, since a writer also reads:
 
 ```nix
-services.kiss-cache-serve-tor = {
+services.kiss-cache.serve-tor = {
   enable = true;
   cacheDir = "/var/lib/nix-cache";
   # reader1 and writer1 may read.
@@ -44,8 +44,8 @@ start.
 Reader (target machine), paired with `kiss-cache-update`:
 
 ```nix
-services.kiss-cache-update.enable = true;
-services.kiss-cache-update-tor = {
+services.kiss-cache.update.enable = true;
+services.kiss-cache.update-tor = {
   enable = true;
   onion = "<contents of kiss-cache-read/hostname>";
   # File containing reader1's *private* key:
@@ -57,11 +57,11 @@ services.kiss-cache-update-tor = {
 Builder, paired with `kiss-cache-publish`:
 
 ```nix
-services.kiss-cache-publish = {
+services.kiss-cache.publish = {
   enable = true;
   systems = [ ... ];
 };
-services.kiss-cache-publish-tor = {
+services.kiss-cache.publish-tor = {
   enable = true;
   onion = "<contents of kiss-cache-write/hostname>";
   # File containing this writer's *private* key.

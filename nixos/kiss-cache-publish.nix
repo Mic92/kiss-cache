@@ -3,7 +3,7 @@
 # The push side of a pull-based deployment: a builder rebuilds each
 # configured system on a timer, `nix copy`s the closure into the
 # cache, and PUTs the toplevel store path into a per-host gcroot
-# marker. Targets running `services.kiss-cache-update` pick it up on
+# marker. Targets running `services.kiss-cache.update` pick it up on
 # their next poll. See docs/deployment.md.
 {
   config,
@@ -12,7 +12,7 @@
   ...
 }:
 let
-  cfg = config.services.kiss-cache-publish;
+  cfg = config.services.kiss-cache.publish;
   local = cfg.cacheDir != null;
 
   # `?` parameters for `nix copy --to` and curl flags for the lock
@@ -99,7 +99,7 @@ let
   };
 in
 {
-  options.services.kiss-cache-publish = {
+  options.services.kiss-cache.publish = {
     enable = lib.mkEnableOption "rebuilding and publishing NixOS systems to a kiss-cache";
 
     package = lib.mkOption {
@@ -148,7 +148,7 @@ in
               example = "web1";
               description = ''
                 Name of the gcroot marker to publish under. Must match
-                the target's `services.kiss-cache-update.marker`.
+                the target's `services.kiss-cache.update.marker`.
               '';
             };
           };
@@ -213,21 +213,21 @@ in
     assertions = [
       {
         assertion = (cfg.cacheUrl == null) != (cfg.cacheDir == null);
-        message = "services.kiss-cache-publish: set exactly one of cacheUrl or cacheDir";
+        message = "services.kiss-cache.publish: set exactly one of cacheUrl or cacheDir";
       }
       {
         assertion = (cfg.tlsCertificate == null) == (cfg.tlsPrivateKey == null);
-        message = "services.kiss-cache-publish: tlsCertificate and tlsPrivateKey must be set together";
+        message = "services.kiss-cache.publish: tlsCertificate and tlsPrivateKey must be set together";
       }
       {
         # mTLS options have no effect for file:// access; catch the
         # inconsistency rather than ignore the options silently.
         assertion = local -> (cfg.tlsCertificate == null && cfg.tlsCACertificate == null);
-        message = "services.kiss-cache-publish: TLS options have no effect with cacheDir";
+        message = "services.kiss-cache.publish: TLS options have no effect with cacheDir";
       }
       {
         assertion = cfg.systems != [ ];
-        message = "services.kiss-cache-publish.systems must not be empty";
+        message = "services.kiss-cache.publish.systems must not be empty";
       }
     ];
 
@@ -242,7 +242,7 @@ in
       # Only create the gcroots dir if no other module already does
       # (kiss-cache-serve manages it with an age policy). A second `d`
       # rule with no age would shadow the policy and disable expiry.
-      tmpfiles.rules = lib.mkIf (local && !(config.services.kiss-cache-serve.enable or false)) [
+      tmpfiles.rules = lib.mkIf (local && !(config.services.kiss-cache.serve.enable or false)) [
         "d ${cfg.cacheDir}/gcroots 0755 root root -"
       ];
 

@@ -16,7 +16,7 @@ testers.runNixOSTest {
   nodes.cache = {
     imports = [ nixosModule ];
     networking.firewall.enable = false;
-    services.kiss-cache-serve-tor = {
+    services.kiss-cache.serve-tor = {
       enable = true;
       cacheDir = "/var/lib/nix-cache";
       readClients = [ "descriptor:x25519:RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR" ];
@@ -37,15 +37,15 @@ testers.runNixOSTest {
       # (56-char base32 with checksum and version), and the key must
       # base32-decode to 32 bytes. These dummies never connect anywhere
       # — the test has no directory authorities — but they must parse.
-      services = {
-        kiss-cache-update.enable = true;
-        kiss-cache-update-tor = {
+      services.kiss-cache = {
+        update.enable = true;
+        update-tor = {
           enable = true;
           # ed25519 pubkey 0x00*32 + checksum + version 3.
           onion = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaam2dqd.onion";
           clientAuthFile = pkgs.writeText "onion-auth-read" "descriptor:x25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         };
-        kiss-cache-publish = {
+        publish = {
           enable = true;
           systems = [
             {
@@ -54,7 +54,7 @@ testers.runNixOSTest {
             }
           ];
         };
-        kiss-cache-publish-tor = {
+        publish-tor = {
           enable = true;
           # ed25519 pubkey 0x01*32 + checksum + version 3.
           onion = "aeaqcaibaeaqcaibaeaqcaibaeaqcaibaeaqcaibaeaqcaibaea37ead.onion";

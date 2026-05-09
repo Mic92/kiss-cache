@@ -12,10 +12,10 @@
   ...
 }:
 let
-  cfg = config.services.kiss-cache-serve;
+  cfg = config.services.kiss-cache.serve;
 in
 {
-  options.services.kiss-cache-serve = {
+  options.services.kiss-cache.serve = {
     enable = lib.mkEnableOption "serving a Nix binary cache over HTTPS with mutual TLS";
 
     cacheDir = lib.mkOption {
@@ -214,7 +214,7 @@ in
           # Marker files registering remote gcroots (see `writers` doc).
           # Writers PUT/DELETE markers; any authenticated client may GET
           # them, so target machines can use a marker as their profile
-          # pointer (see `services.kiss-cache-update`).
+          # pointer (see `services.kiss-cache.update`).
           "/gcroots/" = lib.mkIf (cfg.writers != [ ]) {
             extraConfig = ''
               # Same write ACL as `/`: any authenticated client may GET a

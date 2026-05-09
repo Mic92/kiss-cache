@@ -53,7 +53,7 @@ at `<GCROOTS>/.lock/`, restic-style:
 The pruner gives up after `--lock-wait` seconds (default 600) if
 locks do not drain; the systemd timer retries on its next trigger.
 
-CI scripts that publish without `services.kiss-cache-publish` must
+CI scripts that publish without `services.kiss-cache.publish` must
 follow the same protocol. A writer that skips it cannot corrupt
 anything else, but its own pushed closures may end up with dangling
 references if a prune races the upload.

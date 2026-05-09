@@ -50,7 +50,7 @@ testers.runNixOSTest {
         locations."= /.well-known/jwks".alias = "${issuer}/jwks.json";
       };
 
-      services.kiss-cache-serve-oidc = {
+      services.kiss-cache.serve-oidc = {
         enable = true;
         cacheDir = "/var/lib/nix-cache";
         hostName = "cache.test";

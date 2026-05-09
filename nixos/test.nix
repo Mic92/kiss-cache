@@ -30,7 +30,7 @@ testers.runNixOSTest {
       networking.firewall.allowedTCPPorts = [ 443 ];
 
       # Local-mode publish: colocated with the cache, no HTTP.
-      services.kiss-cache-publish = {
+      services.kiss-cache.publish = {
         enable = true;
         cacheDir = "/var/lib/nix-cache";
         secretKeyFile = "/etc/nix/secret-key";
@@ -61,21 +61,21 @@ testers.runNixOSTest {
 
       services = {
         nginx.virtualHosts."upstream".root = "/var/lib/upstream-cache";
-        kiss-cache-serve = {
-          enable = true;
-          cacheDir = "/var/lib/nix-cache";
-          hostName = "cache";
-          sslCertificate = "${certs.server}";
-          sslCertificateKey = "${certs.serverKey}";
-          clientCA = "${certs.ca}";
-          writers = [ "CN=writer" ];
-          fallbackCache = "http://upstream";
-          gcRootMaxAge = "7d";
-        };
         kiss-cache = {
           enable = true;
           cacheDir = "/var/lib/nix-cache";
           gcRoots = [ "/var/lib/nix-cache-roots" ];
+          serve = {
+            enable = true;
+            cacheDir = "/var/lib/nix-cache";
+            hostName = "cache";
+            sslCertificate = "${certs.server}";
+            sslCertificateKey = "${certs.serverKey}";
+            clientCA = "${certs.ca}";
+            writers = [ "CN=writer" ];
+            fallbackCache = "http://upstream";
+            gcRootMaxAge = "7d";
+          };
         };
       };
       # Lock subtests run the binary by hand to control --lock-wait.
@@ -87,7 +87,7 @@ testers.runNixOSTest {
     {
       imports = [ nixosModule ];
       # `kiss-cache with-lock` subtest invokes the binary directly.
-      environment.systemPackages = [ config.services.kiss-cache-publish.package ];
+      environment.systemPackages = [ config.services.kiss-cache.publish.package ];
       virtualisation.writableStore = true;
       nix.settings = {
         experimental-features = [
@@ -100,7 +100,7 @@ testers.runNixOSTest {
         trusted-public-keys = lib.mkForce [ publicKey ];
         ssl-cert-file = "${certs.ca}";
       };
-      services.kiss-cache-update = {
+      services.kiss-cache.update = {
         enable = true;
         cacheUrl = "https://cache";
         marker = "importer";
@@ -108,7 +108,7 @@ testers.runNixOSTest {
         tlsPrivateKey = "${certs.clientKey}";
         tlsCACertificate = "${certs.ca}";
       };
-      services.kiss-cache-publish = {
+      services.kiss-cache.publish = {
         enable = true;
         cacheUrl = "https://cache";
         tlsCertificate = "${certs.writer}";
