@@ -16,8 +16,7 @@ them together:
 - `services.kiss-cache.serve-oidc` authenticates clients with OIDC
   bearer tokens instead of mTLS; see [oidc.md](oidc.md).
 
-See the [README quick start](../README.md#quick-start-nixos) for the
-flake skeleton.
+See [quickstart.md](quickstart.md) for the flake skeleton.
 
 Reading clients configure the substituter with Nix's `tls-certificate`
 and `tls-private-key` store parameters:
