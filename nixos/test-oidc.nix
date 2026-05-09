@@ -8,7 +8,6 @@
   testers,
   nixosModule,
   runCommand,
-  openssl,
   python3,
 }:
 let
@@ -21,17 +20,15 @@ let
   '';
   mint = "${pythonWithCrypto}/bin/python3 ${./oidc-test-issuer.py} mint ${issuer}/key.pem";
 
-  snakeCert = runCommand "snake-cert" { nativeBuildInputs = [ openssl ]; } ''
-    mkdir -p $out
-    openssl req -x509 -newkey ed25519 -nodes -days 36500 -subj /CN=cache.test \
-      -keyout $out/key -out $out/cert
-  '';
+  # Generated at VM boot; never cached as a derivation, so it
+  # cannot expire under us.
+  snakeCert = "/run/test-certs";
 in
 testers.runNixOSTest {
   name = "kiss-cache-oidc";
 
   nodes.cache =
-    { ... }:
+    { pkgs, ... }:
     {
       imports = [ nixosModule ];
       networking.firewall.enable = false;
@@ -65,10 +62,33 @@ testers.runNixOSTest {
         readSubjects = [ "repo:example/*" ];
         writeSubjects = [ "repo:example/infra:ref:refs/heads/main" ];
       };
-      systemd.tmpfiles.rules = [
-        "d /var/lib/nix-cache 0755 nginx nginx -"
-        "d /var/lib/nix-cache/nar 0755 nginx nginx -"
-      ];
+      systemd = {
+        tmpfiles.rules = [
+          "d /var/lib/nix-cache 0755 nginx nginx -"
+          "d /var/lib/nix-cache/nar 0755 nginx nginx -"
+        ];
+        # Self-signed cert generated at boot, before nginx.
+        services.gen-test-certs = {
+          wantedBy = [ "multi-user.target" ];
+          before = [ "nginx.service" ];
+          path = [ pkgs.openssl ];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+          };
+          script = ''
+            mkdir -p ${snakeCert}
+            [[ -e ${snakeCert}/cert ]] && exit 0
+            openssl req -x509 -newkey ed25519 -nodes -days 1 -subj /CN=cache.test \
+              -keyout ${snakeCert}/key -out ${snakeCert}/cert
+            chmod a+r ${snakeCert}/key ${snakeCert}/cert
+          '';
+        };
+        services.nginx = {
+          wants = [ "gen-test-certs.service" ];
+          after = [ "gen-test-certs.service" ];
+        };
+      };
     };
 
   testScript = ''

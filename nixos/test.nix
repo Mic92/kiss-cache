@@ -1,47 +1,12 @@
 {
   testers,
   nixosModule,
-  runCommand,
-  openssl,
+  pkgs,
 }:
 let
-  # Self-signed CA + server cert + client cert for the mTLS handshake. Built
-  # at evaluation time so the test is hermetic.
-  certs =
-    runCommand "nix-cache-test-certs"
-      {
-        nativeBuildInputs = [ openssl ];
-      }
-      ''
-        mkdir -p $out
-        cd $out
-
-        # CA
-        openssl req -x509 -newkey ed25519 -nodes -days 36500 \
-          -subj "/CN=nix-cache-test-ca" \
-          -keyout ca.key -out ca.pem
-
-        # Server cert for "cache" with a SAN so curl/nix verify it.
-        openssl req -newkey ed25519 -nodes \
-          -subj "/CN=cache" -addext "subjectAltName=DNS:cache" \
-          -keyout server.key -out server.csr
-        openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key \
-          -days 36500 -copy_extensions copy -out server.pem
-
-        # Read-only client cert presented by the importer.
-        openssl req -newkey ed25519 -nodes \
-          -subj "/CN=reader" \
-          -keyout client.key -out client.csr
-        openssl x509 -req -in client.csr -CA ca.pem -CAkey ca.key \
-          -days 36500 -out client.pem
-
-        # Write-allowed cert presented by a builder pushing to the cache.
-        openssl req -newkey ed25519 -nodes \
-          -subj "/CN=writer" \
-          -keyout writer.key -out writer.csr
-        openssl x509 -req -in writer.csr -CA ca.pem -CAkey ca.key \
-          -days 36500 -out writer.pem
-      '';
+  # Generated at VM boot, shared over 9p so both nodes see the same
+  # CA. Never cached as a derivation, so they cannot expire under us.
+  certs = import ./test-certs.nix { inherit pkgs; };
 
   signingKey = "cache:SerxxAca5NEsYY0DwVo+subokk+OoHcD9m6JwuctzHgSQVfGHe6nCc+NReDjV3QdFYPMGix4FMg0+K/TM1B3aA==";
   publicKey = "cache:EkFXxh3upwnPjUXg41d0HRWDzBoseBTINPiv0zNQd2g=";
@@ -52,7 +17,10 @@ testers.runNixOSTest {
   nodes.cache =
     { config, lib, ... }:
     {
-      imports = [ nixosModule ];
+      imports = [
+        nixosModule
+        certs.generator
+      ];
 
       virtualisation.writableStore = true;
       nix.settings.experimental-features = [
@@ -97,9 +65,9 @@ testers.runNixOSTest {
           enable = true;
           cacheDir = "/var/lib/nix-cache";
           hostName = "cache";
-          sslCertificate = "${certs}/server.pem";
-          sslCertificateKey = "${certs}/server.key";
-          clientCA = "${certs}/ca.pem";
+          sslCertificate = "${certs.server}";
+          sslCertificateKey = "${certs.serverKey}";
+          clientCA = "${certs.ca}";
           writers = [ "CN=writer" ];
           fallbackCache = "http://upstream";
           gcRootMaxAge = "7d";
@@ -127,25 +95,25 @@ testers.runNixOSTest {
           "flakes"
         ];
         substituters = lib.mkForce [
-          "https://cache?tls-certificate=${certs}/client.pem&tls-private-key=${certs}/client.key"
+          "https://cache?tls-certificate=${certs.client}&tls-private-key=${certs.clientKey}"
         ];
         trusted-public-keys = lib.mkForce [ publicKey ];
-        ssl-cert-file = "${certs}/ca.pem";
+        ssl-cert-file = "${certs.ca}";
       };
       services.kiss-cache-update = {
         enable = true;
         cacheUrl = "https://cache";
         marker = "importer";
-        tlsCertificate = "${certs}/client.pem";
-        tlsPrivateKey = "${certs}/client.key";
-        tlsCACertificate = "${certs}/ca.pem";
+        tlsCertificate = "${certs.client}";
+        tlsPrivateKey = "${certs.clientKey}";
+        tlsCACertificate = "${certs.ca}";
       };
       services.kiss-cache-publish = {
         enable = true;
         cacheUrl = "https://cache";
-        tlsCertificate = "${certs}/writer.pem";
-        tlsPrivateKey = "${certs}/writer.key";
-        tlsCACertificate = "${certs}/ca.pem";
+        tlsCertificate = "${certs.writer}";
+        tlsPrivateKey = "${certs.writerKey}";
+        tlsCACertificate = "${certs.ca}";
         # The flakeRef is patched at runtime: an isolated test cannot
         # fetch a remote flake, and the toplevel of a NixOS test VM
         # cannot be re-built inside itself. The subtest writes a local
@@ -164,16 +132,17 @@ testers.runNixOSTest {
 
   testScript = ''
     start_all()
+    ${certs.copyTo "importer"}
     cache.wait_for_unit("nginx.service")
     cache.wait_for_open_port(443)
     importer.wait_for_unit("multi-user.target")
 
-    ca = "${certs}/ca.pem"
-    cert = "${certs}/client.pem"
-    key = "${certs}/client.key"
+    ca = "${certs.ca}"
+    cert = "${certs.client}"
+    key = "${certs.clientKey}"
     store = f"https://cache?tls-certificate={cert}&tls-private-key={key}"
-    wcert = "${certs}/writer.pem"
-    wkey = "${certs}/writer.key"
+    wcert = "${certs.writer}"
+    wkey = "${certs.writerKey}"
     wstore = f"https://cache?compression=zstd&tls-certificate={wcert}&tls-private-key={wkey}"
 
     with subtest("mTLS rejects clients without a certificate"):
