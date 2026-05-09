@@ -4,12 +4,17 @@ The flake ships several NixOS modules and a `default` module that wires
 them together:
 
 - `services.kiss-cache` runs the pruner on a systemd timer.
-- `services.kiss-cache-serve` serves the cache over HTTPS with mutual
+- `services.kiss-cache.serve` serves the cache over HTTPS with mutual
   TLS via nginx, with optional WebDAV `PUT` for trusted writers.
-- `services.kiss-cache-update` polls a gcroot marker and switches the
+- `services.kiss-cache.update` polls a gcroot marker and switches the
   system to the closure it names; see [deployment.md](deployment.md).
-- `services.kiss-cache-serve-tor` and `services.kiss-cache-update-tor`
-  route everything over Tor; see [tor.md](tor.md).
+- `services.kiss-cache.publish` rebuilds NixOS systems on a timer and
+  pushes them to the cache; see [deployment.md](deployment.md).
+- `services.kiss-cache.serve-tor`, `services.kiss-cache.update-tor`
+  and `services.kiss-cache.publish-tor` route everything over Tor;
+  see [tor.md](tor.md).
+- `services.kiss-cache.serve-oidc` authenticates clients with OIDC
+  bearer tokens instead of mTLS; see [oidc.md](oidc.md).
 
 See the [README quick start](../README.md#quick-start-nixos) for the
 flake skeleton.
@@ -28,18 +33,21 @@ local cache, and compresses nearly as well.
 
 ```console
 $ store='https://cache.example.org?compression=zstd&secret-key=/etc/nix/cache-key&tls-certificate=writer.pem&tls-private-key=writer.key'
-$ nix copy --to "$store" /nix/store/abc...-hello
-$ echo /nix/store/abc...-hello | curl --cert writer.pem --key writer.key \
-    -X PUT --data-binary @- "https://cache.example.org/gcroots/my-job"
+$ nix run github:Mic92/kiss-cache -- with-lock \
+    https://cache.example.org/gcroots/my-job /nix/store/abc...-hello \
+    --cert writer.pem --key writer.key --cacert ca.pem -- \
+    nix copy --to "$store" /nix/store/abc...-hello
 ```
 
 Without the marker, the pushed closure is deleted on the next prune.
+The wrapper takes a cooperative lock against the pruner before
+pushing; see [pruner.md](pruner.md#concurrent-writes).
 
 Set `gcRootMaxAge` to expire stale markers automatically. Writers must
 re-`PUT` on each push to keep their closures alive:
 
 ```nix
-services.kiss-cache-serve.gcRootMaxAge = "30d";
+services.kiss-cache.serve.gcRootMaxAge = "30d";
 ```
 
 Set `fallbackCache` to chain through to an upstream cache: a local
@@ -47,7 +55,7 @@ miss is fetched from there and stored, so the next request for the
 same path is a local hit.
 
 ```nix
-services.kiss-cache-serve.fallbackCache = "https://cache.nixos.org";
+services.kiss-cache.serve.fallbackCache = "https://cache.nixos.org";
 ```
 
 Clients receive the upstream's signature unmodified; add its public
@@ -69,9 +77,9 @@ in
 {
   imports = [ "${kiss-cache}/nixos" ];
 
-  services.kiss-cache-serve = { ... };
+  services.kiss-cache.serve = { ... };
   services.kiss-cache = { ... };
-  services.kiss-cache-update = { ... };
+  services.kiss-cache.update = { ... };
 }
 ```
 

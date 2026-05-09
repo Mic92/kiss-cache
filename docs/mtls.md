@@ -56,7 +56,7 @@ Any certificate signed by the CA can read. Only those listed in
 `writers` can push:
 
 ```nix
-services.kiss-cache-serve.writers = [ "CN=builder-01" ];
+services.kiss-cache.serve.writers = [ "CN=builder-01" ];
 ```
 
 ## Client configuration

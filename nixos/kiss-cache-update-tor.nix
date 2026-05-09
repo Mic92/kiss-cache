@@ -6,7 +6,7 @@
 # is layered on top.
 #
 # Generate the client keypair and pass the private key here; the
-# matching public key goes into `services.kiss-cache-serve-tor.readClients`
+# matching public key goes into `services.kiss-cache.serve-tor.readClients`
 # on the cache. See that module's header for the openssl one-liners.
 {
   config,
@@ -14,11 +14,11 @@
   ...
 }:
 let
-  cfg = config.services.kiss-cache-update-tor;
+  cfg = config.services.kiss-cache.update-tor;
   socks = "127.0.0.1:${toString cfg.socksPort}";
 in
 {
-  options.services.kiss-cache-update-tor = {
+  options.services.kiss-cache.update-tor = {
     enable = lib.mkEnableOption "pulling NixOS system updates from a kiss-cache .onion";
 
     onion = lib.mkOption {
@@ -56,7 +56,7 @@ in
       };
     };
 
-    services.kiss-cache-update.cacheUrl = lib.mkDefault "http://${cfg.onion}";
+    services.kiss-cache.update.cacheUrl = lib.mkDefault "http://${cfg.onion}";
 
     # Route both curl (marker fetch) and nix-store (substitution)
     # through the SOCKS proxy. `socks5h` resolves the .onion inside the

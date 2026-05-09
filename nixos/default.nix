@@ -5,7 +5,7 @@
 #
 { config, lib, ... }:
 let
-  serve = config.services.kiss-cache-serve;
+  serve = config.services.kiss-cache.serve;
 in
 {
   imports = [

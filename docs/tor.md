@@ -24,7 +24,7 @@ Cache server: list every client's public key under the onion(s) it
 may reach. A writer needs both, since a writer also reads:
 
 ```nix
-services.kiss-cache-serve-tor = {
+services.kiss-cache.serve-tor = {
   enable = true;
   cacheDir = "/var/lib/nix-cache";
   # reader1 and writer1 may read.
@@ -44,8 +44,8 @@ start.
 Reader (target machine), paired with `kiss-cache-update`:
 
 ```nix
-services.kiss-cache-update.enable = true;
-services.kiss-cache-update-tor = {
+services.kiss-cache.update.enable = true;
+services.kiss-cache.update-tor = {
   enable = true;
   onion = "<contents of kiss-cache-read/hostname>";
   # File containing reader1's *private* key:
@@ -57,11 +57,11 @@ services.kiss-cache-update-tor = {
 Builder, paired with `kiss-cache-publish`:
 
 ```nix
-services.kiss-cache-publish = {
+services.kiss-cache.publish = {
   enable = true;
   systems = [ ... ];
 };
-services.kiss-cache-publish-tor = {
+services.kiss-cache.publish-tor = {
   enable = true;
   onion = "<contents of kiss-cache-write/hostname>";
   # File containing this writer's *private* key.
@@ -69,7 +69,9 @@ services.kiss-cache-publish-tor = {
 };
 ```
 
-For manual `nix copy` and `curl` over Tor, set
+For manual publishes over Tor, set
 `ALL_PROXY=socks5h://127.0.0.1:9050` after configuring
-`services.tor.client.onionServices.<write-onion>.clientAuthorizations`.
+`services.tor.client.onionServices.<write-onion>.clientAuthorizations`,
+then use `kiss-cache with-lock` as in any other publish; both `curl`
+and `nix copy` honour the proxy.
 

@@ -48,6 +48,12 @@
         pkgs:
         {
           inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) kiss-cache;
+          # Bounded model check of the prune/upload concurrency design.
+          # `expect` annotations make Alloy exit nonzero if any
+          # invariant is violated or the documented bug disappears.
+          alloy = pkgs.runCommand "kiss-cache-alloy" { nativeBuildInputs = [ pkgs.alloy6 ]; } ''
+            alloy6 exec -o $out ${./spec/prune.als}
+          '';
         }
         # The VM test only runs on Linux.
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {

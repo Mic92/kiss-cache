@@ -74,12 +74,7 @@ impl Fixture {
     }
 
     fn run(&self, dry_run: bool) {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_kiss-cache"));
-        if dry_run {
-            cmd.arg("-n");
-        }
-        cmd.arg(&self.cache).arg(&self.gcroots);
-        let out = cmd.output().unwrap();
+        let out = self.run_raw(dry_run);
         assert!(
             out.status.success(),
             "exit={:?}\nstdout:\n{}\nstderr:\n{}",
@@ -87,6 +82,18 @@ impl Fixture {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr),
         );
+    }
+
+    fn run_raw(&self, dry_run: bool) -> std::process::Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_kiss-cache"));
+        cmd.arg("prune");
+        if dry_run {
+            cmd.arg("-n");
+        }
+        // Don't wait when a lock is held; tests assert immediately.
+        cmd.arg("--lock-wait").arg("0");
+        cmd.arg(&self.cache).arg(&self.gcroots);
+        cmd.output().unwrap()
     }
 
     fn narinfo_exists(&self, hash: &str) -> bool {
@@ -264,4 +271,104 @@ fn ls_listing_pruned_with_narinfo() {
         !fx.ls_exists(HASH_GARBAGE),
         "pruned narinfo also prunes its .ls"
     );
+}
+
+#[test]
+fn fresh_shared_lock_blocks_prune() {
+    let fx = standard_fixture();
+    let lock_dir = fx.gcroots.join(".lock");
+    fs::create_dir_all(&lock_dir).unwrap();
+    fs::write(lock_dir.join("ci-job"), b"shared\n").unwrap();
+    let out = fx.run_raw(false);
+    assert!(!out.status.success());
+    assert!(
+        fx.narinfo_exists(HASH_GARBAGE),
+        "prune must not touch the cache while a writer holds a lock"
+    );
+    // The pruner removed its own contender lock when it backed off.
+    assert_eq!(fs::read_dir(&lock_dir).unwrap().count(), 1);
+}
+
+#[test]
+fn stale_shared_lock_does_not_block_prune() {
+    let fx = standard_fixture();
+    let lock_dir = fx.gcroots.join(".lock");
+    fs::create_dir_all(&lock_dir).unwrap();
+    let lock = lock_dir.join("crashed-ci-job");
+    fs::write(&lock, b"shared\n").unwrap();
+    fs::File::open(&lock)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+        .unwrap();
+    fx.run(false);
+    assert!(
+        !fx.narinfo_exists(HASH_GARBAGE),
+        "a stale lock from a crashed writer must not block pruning"
+    );
+}
+
+#[test]
+fn with_lock_local_writes_marker_and_cleans_up() {
+    let fx = standard_fixture();
+    let marker = fx.gcroots.join("new-job");
+    let out = Command::new(env!("CARGO_BIN_EXE_kiss-cache"))
+        .args(["with-lock"])
+        .arg(&marker)
+        .args(["/nix/store/zzz-thing", "--", "true"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap(),
+        "/nix/store/zzz-thing\n"
+    );
+    assert_eq!(
+        fs::read_dir(fx.gcroots.join(".lock")).unwrap().count(),
+        0,
+        "lock removed on success"
+    );
+}
+
+#[test]
+fn with_lock_failed_command_does_not_write_marker() {
+    let fx = standard_fixture();
+    let marker = fx.gcroots.join("bad-job");
+    let out = Command::new(env!("CARGO_BIN_EXE_kiss-cache"))
+        .args(["with-lock"])
+        .arg(&marker)
+        .args(["/nix/store/zzz-thing", "--", "false"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(!marker.exists(), "marker not written on command failure");
+    assert_eq!(
+        fs::read_dir(fx.gcroots.join(".lock")).unwrap().count(),
+        0,
+        "lock removed on failure"
+    );
+}
+
+#[test]
+fn with_lock_bearer_exports_token_to_command() {
+    let fx = standard_fixture();
+    let marker = fx.gcroots.join("oidc-job");
+    let proof = fx.gcroots.join("token-seen");
+    let out = Command::new(env!("CARGO_BIN_EXE_kiss-cache"))
+        .args(["with-lock", "--bearer", "s3cr3t"])
+        .arg(&marker)
+        .args(["/nix/store/zzz-thing", "--", "sh", "-c"])
+        .arg(format!("echo \"$KISS_CACHE_TOKEN\" > {}", proof.display()))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::read_to_string(&proof).unwrap().trim(), "s3cr3t");
+    assert!(marker.exists());
 }

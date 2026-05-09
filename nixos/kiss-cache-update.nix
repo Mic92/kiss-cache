@@ -14,7 +14,7 @@
   ...
 }:
 let
-  cfg = config.services.kiss-cache-update;
+  cfg = config.services.kiss-cache.update;
 
   # The marker fetch (curl) and the substitution (nix-store) hit the
   # same cache; keep their TLS credentials derived from one option set
@@ -132,7 +132,7 @@ let
   };
 in
 {
-  options.services.kiss-cache-update = {
+  options.services.kiss-cache.update = {
     enable = lib.mkEnableOption "pulling NixOS system updates from a kiss-cache";
 
     cacheUrl = lib.mkOption {
@@ -241,7 +241,7 @@ in
     assertions = [
       {
         assertion = (cfg.tlsCertificate == null) == (cfg.tlsPrivateKey == null);
-        message = "services.kiss-cache-update: tlsCertificate and tlsPrivateKey must be set together";
+        message = "services.kiss-cache.update: tlsCertificate and tlsPrivateKey must be set together";
       }
     ];
 
@@ -252,7 +252,7 @@ in
     # turned off.
     warnings =
       lib.optional ((config.nix.settings.require-sigs or true) == false)
-        "services.kiss-cache-update: nix.settings.require-sigs is off; a compromised cache could take over this host";
+        "services.kiss-cache.update: nix.settings.require-sigs is off; a compromised cache could take over this host";
 
     environment.systemPackages = [ updateScript ];
 

@@ -11,17 +11,23 @@ From CI or any shell:
 
 ```console
 $ system=$(nix build --no-link --print-out-paths .#nixosConfigurations.web1.config.system.build.toplevel)
-$ nix copy --to "$store" "$system"
-$ echo "$system" | curl --cert writer.pem --key writer.key \
-    -X PUT --data-binary @- "https://cache.example.org/gcroots/web1"
+$ nix run github:Mic92/kiss-cache -- with-lock \
+    https://cache.example.org/gcroots/web1 "$system" \
+    --cert writer.pem --key writer.key --cacert ca.pem -- \
+    nix copy --to "$store" "$system"
 ```
 
-Or use `services.kiss-cache-publish` to rebuild on a timer and push
-automatically. One builder publishes any number of systems; targets
+The wrapper takes a cooperative lock that keeps a concurrent prune
+from sweeping a shared dependency between `nix copy` and the marker
+landing, then PUTs the marker. See
+[docs/pruner.md](pruner.md#concurrent-writes).
+
+Or use `services.kiss-cache.publish`, which handles the lock
+automatically and rebuilds on a timer. One builder publishes any number of systems; targets
 subscribe to their marker:
 
 ```nix
-services.kiss-cache-publish = {
+services.kiss-cache.publish = {
   enable = true;
   cacheUrl = "https://cache.example.org";
   schedule = "*-*-* 02:00:00";
@@ -54,7 +60,7 @@ instead of `cacheUrl`: closures copy via `file://` and markers are
 written directly, no HTTP, no writer certificate.
 
 ```nix
-services.kiss-cache-publish = {
+services.kiss-cache.publish = {
   enable = true;
   cacheDir = "/var/lib/nix-cache";
   secretKeyFile = "/run/keys/cache-key";
@@ -67,7 +73,7 @@ services.kiss-cache-publish = {
 On the target:
 
 ```nix
-services.kiss-cache-update = {
+services.kiss-cache.update = {
   enable = true;
   cacheUrl = "https://cache.example.org";
   marker = "web1";  # default: networking.hostName

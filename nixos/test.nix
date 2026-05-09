@@ -1,47 +1,12 @@
 {
   testers,
   nixosModule,
-  runCommand,
-  openssl,
+  pkgs,
 }:
 let
-  # Self-signed CA + server cert + client cert for the mTLS handshake. Built
-  # at evaluation time so the test is hermetic.
-  certs =
-    runCommand "nix-cache-test-certs"
-      {
-        nativeBuildInputs = [ openssl ];
-      }
-      ''
-        mkdir -p $out
-        cd $out
-
-        # CA
-        openssl req -x509 -newkey ed25519 -nodes -days 1 \
-          -subj "/CN=nix-cache-test-ca" \
-          -keyout ca.key -out ca.pem
-
-        # Server cert for "cache" with a SAN so curl/nix verify it.
-        openssl req -newkey ed25519 -nodes \
-          -subj "/CN=cache" -addext "subjectAltName=DNS:cache" \
-          -keyout server.key -out server.csr
-        openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key \
-          -days 1 -copy_extensions copy -out server.pem
-
-        # Read-only client cert presented by the importer.
-        openssl req -newkey ed25519 -nodes \
-          -subj "/CN=reader" \
-          -keyout client.key -out client.csr
-        openssl x509 -req -in client.csr -CA ca.pem -CAkey ca.key \
-          -days 1 -out client.pem
-
-        # Write-allowed cert presented by a builder pushing to the cache.
-        openssl req -newkey ed25519 -nodes \
-          -subj "/CN=writer" \
-          -keyout writer.key -out writer.csr
-        openssl x509 -req -in writer.csr -CA ca.pem -CAkey ca.key \
-          -days 1 -out writer.pem
-      '';
+  # Generated at VM boot, shared over 9p so both nodes see the same
+  # CA. Never cached as a derivation, so they cannot expire under us.
+  certs = import ./test-certs.nix { inherit pkgs; };
 
   signingKey = "cache:SerxxAca5NEsYY0DwVo+subokk+OoHcD9m6JwuctzHgSQVfGHe6nCc+NReDjV3QdFYPMGix4FMg0+K/TM1B3aA==";
   publicKey = "cache:EkFXxh3upwnPjUXg41d0HRWDzBoseBTINPiv0zNQd2g=";
@@ -50,9 +15,12 @@ testers.runNixOSTest {
   name = "kiss-cache";
 
   nodes.cache =
-    { lib, ... }:
+    { config, lib, ... }:
     {
-      imports = [ nixosModule ];
+      imports = [
+        nixosModule
+        certs.generator
+      ];
 
       virtualisation.writableStore = true;
       nix.settings.experimental-features = [
@@ -62,7 +30,7 @@ testers.runNixOSTest {
       networking.firewall.allowedTCPPorts = [ 443 ];
 
       # Local-mode publish: colocated with the cache, no HTTP.
-      services.kiss-cache-publish = {
+      services.kiss-cache.publish = {
         enable = true;
         cacheDir = "/var/lib/nix-cache";
         secretKeyFile = "/etc/nix/secret-key";
@@ -93,29 +61,33 @@ testers.runNixOSTest {
 
       services = {
         nginx.virtualHosts."upstream".root = "/var/lib/upstream-cache";
-        kiss-cache-serve = {
-          enable = true;
-          cacheDir = "/var/lib/nix-cache";
-          hostName = "cache";
-          sslCertificate = "${certs}/server.pem";
-          sslCertificateKey = "${certs}/server.key";
-          clientCA = "${certs}/ca.pem";
-          writers = [ "CN=writer" ];
-          fallbackCache = "http://upstream";
-          gcRootMaxAge = "7d";
-        };
         kiss-cache = {
           enable = true;
           cacheDir = "/var/lib/nix-cache";
           gcRoots = [ "/var/lib/nix-cache-roots" ];
+          serve = {
+            enable = true;
+            cacheDir = "/var/lib/nix-cache";
+            hostName = "cache";
+            sslCertificate = "${certs.server}";
+            sslCertificateKey = "${certs.serverKey}";
+            clientCA = "${certs.ca}";
+            writers = [ "CN=writer" ];
+            fallbackCache = "http://upstream";
+            gcRootMaxAge = "7d";
+          };
         };
       };
+      # Lock subtests run the binary by hand to control --lock-wait.
+      environment.systemPackages = [ config.services.kiss-cache.package ];
     };
 
   nodes.importer =
-    { lib, ... }:
+    { config, lib, ... }:
     {
       imports = [ nixosModule ];
+      # `kiss-cache with-lock` subtest invokes the binary directly.
+      environment.systemPackages = [ config.services.kiss-cache.publish.package ];
       virtualisation.writableStore = true;
       nix.settings = {
         experimental-features = [
@@ -123,25 +95,25 @@ testers.runNixOSTest {
           "flakes"
         ];
         substituters = lib.mkForce [
-          "https://cache?tls-certificate=${certs}/client.pem&tls-private-key=${certs}/client.key"
+          "https://cache?tls-certificate=${certs.client}&tls-private-key=${certs.clientKey}"
         ];
         trusted-public-keys = lib.mkForce [ publicKey ];
-        ssl-cert-file = "${certs}/ca.pem";
+        ssl-cert-file = "${certs.ca}";
       };
-      services.kiss-cache-update = {
+      services.kiss-cache.update = {
         enable = true;
         cacheUrl = "https://cache";
         marker = "importer";
-        tlsCertificate = "${certs}/client.pem";
-        tlsPrivateKey = "${certs}/client.key";
-        tlsCACertificate = "${certs}/ca.pem";
+        tlsCertificate = "${certs.client}";
+        tlsPrivateKey = "${certs.clientKey}";
+        tlsCACertificate = "${certs.ca}";
       };
-      services.kiss-cache-publish = {
+      services.kiss-cache.publish = {
         enable = true;
         cacheUrl = "https://cache";
-        tlsCertificate = "${certs}/writer.pem";
-        tlsPrivateKey = "${certs}/writer.key";
-        tlsCACertificate = "${certs}/ca.pem";
+        tlsCertificate = "${certs.writer}";
+        tlsPrivateKey = "${certs.writerKey}";
+        tlsCACertificate = "${certs.ca}";
         # The flakeRef is patched at runtime: an isolated test cannot
         # fetch a remote flake, and the toplevel of a NixOS test VM
         # cannot be re-built inside itself. The subtest writes a local
@@ -160,16 +132,17 @@ testers.runNixOSTest {
 
   testScript = ''
     start_all()
+    ${certs.copyTo "importer"}
     cache.wait_for_unit("nginx.service")
     cache.wait_for_open_port(443)
     importer.wait_for_unit("multi-user.target")
 
-    ca = "${certs}/ca.pem"
-    cert = "${certs}/client.pem"
-    key = "${certs}/client.key"
+    ca = "${certs.ca}"
+    cert = "${certs.client}"
+    key = "${certs.clientKey}"
     store = f"https://cache?tls-certificate={cert}&tls-private-key={key}"
-    wcert = "${certs}/writer.pem"
-    wkey = "${certs}/writer.key"
+    wcert = "${certs.writer}"
+    wkey = "${certs.writerKey}"
     wstore = f"https://cache?compression=zstd&tls-certificate={wcert}&tls-private-key={wkey}"
 
     with subtest("mTLS rejects clients without a certificate"):
@@ -251,6 +224,27 @@ testers.runNixOSTest {
             f"-X PUT --data-binary @- https://cache/gcroots/{marker}"
         )
         cache.succeed(f"grep -qx {push} /var/lib/nix-cache/gcroots/{marker}")
+
+    with subtest("kiss-cache with-lock pushes under a lock and cleans up"):
+        wl = importer.succeed(
+            "nix build --impure --print-out-paths --expr "
+            "'derivation { name = \"hello-with-lock\"; system = builtins.currentSystem; "
+            "builder = \"/bin/sh\"; args = [\"-c\" \"echo with-lock > $out\"]; }'"
+        ).strip()
+        importer.succeed(
+            f"kiss-cache with-lock https://cache/gcroots/wl-job '{wl}' "
+            f"--cacert {ca} --cert {wcert} --key {wkey} -- "
+            f"nix copy --to '{wstore}' '{wl}'"
+        )
+        cache.succeed(f"grep -qx {wl} /var/lib/nix-cache/gcroots/wl-job")
+        cache.succeed("[ $(ls /var/lib/nix-cache/gcroots/.lock | wc -l) -eq 0 ]")
+        # A failing publish command does not leave a lock or marker.
+        importer.fail(
+            f"kiss-cache with-lock https://cache/gcroots/wl-bad '{wl}' "
+            f"--cacert {ca} --cert {wcert} --key {wkey} -- false"
+        )
+        cache.fail("test -e /var/lib/nix-cache/gcroots/wl-bad")
+        cache.succeed("[ $(ls /var/lib/nix-cache/gcroots/.lock | wc -l) -eq 0 ]")
 
     with subtest("reader can GET a gcroot marker, no cert cannot"):
         importer.succeed(
@@ -424,6 +418,75 @@ testers.runNixOSTest {
         importer.succeed(f"nix-store --delete {up} || true")
         importer.succeed(f"nix copy --no-check-sigs --from '{store}' {up}")
         cache.succeed(f"test -e /var/lib/nix-cache/{up_hash}.narinfo")
+
+    with subtest("pruner gives up on a fresh writer lock when wait budget is zero"):
+        importer.succeed(
+            f"echo shared | curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            "-X PUT --data-binary @- https://cache/gcroots/.lock/test-job"
+        )
+        cache.fail(
+            "kiss-cache prune --lock-wait 0 /var/lib/nix-cache "
+            "/var/lib/nix-cache-roots /var/lib/nix-cache/gcroots"
+        )
+        # The contender lock the pruner created was removed on failure.
+        cache.succeed("[ $(ls /var/lib/nix-cache/gcroots/.lock | wc -l) -eq 1 ]")
+
+    with subtest("pruner waits for a writer lock to be released"):
+        # Start a prune that polls; release the lock while it waits.
+        cache.succeed(
+            "systemd-run --unit=prune-wait --service-type=oneshot --no-block "
+            "kiss-cache prune --lock-wait 60 /var/lib/nix-cache "
+            "/var/lib/nix-cache-roots /var/lib/nix-cache/gcroots"
+        )
+        cache.wait_until_succeeds(
+            "systemctl show -p ActiveState --value prune-wait | grep -q activating",
+            timeout=20,
+        )
+        # Held lock: prune polls (5s interval), making no progress.
+        cache.sleep(6)
+        cache.succeed("systemctl show -p ActiveState --value prune-wait | grep -q activating")
+        importer.succeed(
+            f"curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            "-X DELETE https://cache/gcroots/.lock/test-job"
+        )
+        cache.wait_until_succeeds(
+            "systemctl show -p ActiveState --value prune-wait | grep -q inactive",
+            timeout=30,
+        )
+        cache.succeed("systemctl show -p Result --value prune-wait | grep -q success")
+        cache.succeed("[ $(ls /var/lib/nix-cache/gcroots/.lock | wc -l) -eq 0 ]")
+
+    with subtest("a stale writer lock does not block the pruner"):
+        cache.succeed("echo shared > /var/lib/nix-cache/gcroots/.lock/crashed-job")
+        cache.succeed("touch -d '1 hour ago' /var/lib/nix-cache/gcroots/.lock/crashed-job")
+        cache.succeed(
+            "kiss-cache prune --lock-wait 0 /var/lib/nix-cache "
+            "/var/lib/nix-cache-roots /var/lib/nix-cache/gcroots"
+        )
+        cache.succeed("rm /var/lib/nix-cache/gcroots/.lock/crashed-job")
+
+    with subtest("server refuses lock PUT while a prune lock is held"):
+        cache.succeed("echo exclusive > /var/lib/nix-cache/gcroots/.lock/prune-test")
+        rc = importer.succeed(
+            f"echo shared | curl -s -o /dev/null -w '%{{http_code}}' "
+            f"--cacert {ca} --cert {wcert} --key {wkey} "
+            "-X PUT --data-binary @- https://cache/gcroots/.lock/ci-job"
+        ).strip()
+        assert rc == "503", rc
+        # DELETE is never refused so a writer can always release.
+        rc = importer.succeed(
+            f"curl -s -o /dev/null -w '%{{http_code}}' "
+            f"--cacert {ca} --cert {wcert} --key {wkey} "
+            "-X DELETE https://cache/gcroots/.lock/ci-job"
+        ).strip()
+        assert rc != "503", rc
+        # Stale prune lock no longer blocks.
+        cache.succeed("touch -d '1 hour ago' /var/lib/nix-cache/gcroots/.lock/prune-test")
+        importer.succeed(
+            f"echo shared | curl --fail -s --cacert {ca} --cert {wcert} --key {wkey} "
+            "-X PUT --data-binary @- https://cache/gcroots/.lock/ci-job"
+        )
+        cache.succeed("rm /var/lib/nix-cache/gcroots/.lock/prune-test /var/lib/nix-cache/gcroots/.lock/ci-job")
 
     with subtest("old gcroot markers are cleaned by tmpfiles"):
         # Backdate the marker past gcRootMaxAge and run cleanup.

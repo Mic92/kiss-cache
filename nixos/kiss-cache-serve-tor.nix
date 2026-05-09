@@ -18,10 +18,11 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 let
-  cfg = config.services.kiss-cache-serve-tor;
+  cfg = config.services.kiss-cache.serve-tor;
 
   # Unix sockets so nginx never exposes a loopback port: only tor (via
   # BindPaths into its own RootDirectory) and nginx can connect. The
@@ -38,13 +39,13 @@ let
   '';
 in
 {
-  options.services.kiss-cache-serve-tor = {
+  options.services.kiss-cache.serve-tor = {
     enable = lib.mkEnableOption "serving a Nix binary cache over Tor hidden services";
 
     cacheDir = lib.mkOption {
       type = lib.types.path;
       example = "/var/lib/nix-cache";
-      description = "Binary cache directory to serve. See `services.kiss-cache-serve.cacheDir`.";
+      description = "Binary cache directory to serve. See `services.kiss-cache.serve.cacheDir`.";
     };
 
     priority = lib.mkOption {
@@ -64,7 +65,7 @@ in
       description = ''
         Clients authorized to read. One `descriptor:x25519:<base32>`
         public key per client; the matching private key goes on the
-        client's machine (see `services.kiss-cache-update-tor`). Empty
+        client's machine (see `services.kiss-cache.update-tor`). Empty
         list disables client authorization for the read onion: anyone
         who learns the address can read.
       '';
@@ -87,7 +88,7 @@ in
     assertions = [
       {
         assertion = cfg.writeClients != [ ];
-        message = "services.kiss-cache-serve-tor.writeClients must not be empty";
+        message = "services.kiss-cache.serve-tor.writeClients must not be empty";
       }
     ];
 
@@ -126,6 +127,11 @@ in
 
       nginx = {
         enable = true;
+        additionalModules = [ pkgs.nginxModules.njs ];
+        appendHttpConfig = ''
+          js_import kiss_cache_lock from ${./lock-guard.js};
+          js_set $kiss_cache_prune_locked kiss_cache_lock.pruneLockHeld;
+        '';
         virtualHosts = {
           # Read-only: serve narinfo/nar and gcroot markers, no DAV.
           kiss-cache-tor-read = {
@@ -151,6 +157,9 @@ in
           kiss-cache-tor-write = {
             listen = [ { addr = "unix:${writeSocket}"; } ];
             root = cfg.cacheDir;
+            extraConfig = ''
+              set $kiss_cache_lock_dir ${cfg.cacheDir}/gcroots/.lock;
+            '';
             locations = {
               "/".extraConfig = ''
                 expires max;
@@ -170,6 +179,18 @@ in
                 ${davCommon}
                 client_max_body_size 4k;
               '';
+              # Lock PUTs are refused while the pruner is running.
+              # See lock-guard.js and kiss-cache-serve.nix.
+              "/gcroots/.lock/".extraConfig = ''
+                if ($kiss_cache_prune_locked) {
+                  return 503 "cache is being pruned, retry later\n";
+                }
+                expires off;
+                add_header Cache-Control no-store;
+                dav_methods PUT DELETE;
+                ${davCommon}
+                client_max_body_size 1k;
+              '';
             };
           };
         };
@@ -182,6 +203,7 @@ in
       tmpfiles.rules = [
         "d ${cfg.cacheDir}/.tmp 0700 ${config.services.nginx.user} ${config.services.nginx.group} -"
         "d ${cfg.cacheDir}/gcroots 0755 ${config.services.nginx.user} ${config.services.nginx.group} -"
+        "d ${cfg.cacheDir}/gcroots/.lock 0755 ${config.services.nginx.user} ${config.services.nginx.group} m:1h"
         # Tor connects to the sockets as the `tor` user; group-writable
         # sockets in a tor-group dir let it without granting world access.
         "d ${socketDir} 0750 ${config.services.nginx.user} tor -"

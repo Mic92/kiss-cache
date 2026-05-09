@@ -9,11 +9,11 @@
   ...
 }:
 let
-  cfg = config.services.kiss-cache-publish-tor;
+  cfg = config.services.kiss-cache.publish-tor;
   socks = "127.0.0.1:${toString cfg.socksPort}";
 in
 {
-  options.services.kiss-cache-publish-tor = {
+  options.services.kiss-cache.publish-tor = {
     enable = lib.mkEnableOption "publishing NixOS systems to a kiss-cache .onion";
 
     onion = lib.mkOption {
@@ -52,7 +52,7 @@ in
       };
     };
 
-    services.kiss-cache-publish.cacheUrl = lib.mkDefault "http://${cfg.onion}";
+    services.kiss-cache.publish.cacheUrl = lib.mkDefault "http://${cfg.onion}";
 
     # Route both `nix copy` and the marker `PUT` through Tor's SOCKS
     # proxy. `socks5h` resolves the .onion inside the proxy; a plain
